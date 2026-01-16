@@ -1,0 +1,15 @@
+*.swp
+*.swo
+*~
+.DS_Store
+.branch_cache
+
+HOMEBREW_SETUP.md
+config
+.idea/*
+.idea
+.cursor/*
+.cursor
+.jira_keys*
+
+AGENT-DOCUMENTATION.md

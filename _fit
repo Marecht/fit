@@ -1,0 +1,226 @@
+#compdef fit
+
+_fit() {
+    local config_file=""
+    local use_github="false"
+    local project_manager=""
+    
+    if command -v brew >/dev/null 2>&1; then
+        local brew_prefix=$(brew --prefix 2>/dev/null)
+        if [ -n "$brew_prefix" ] && [ -f "$brew_prefix/opt/fit/config" ]; then
+            config_file="$brew_prefix/opt/fit/config"
+        fi
+    fi
+    if [ -z "$config_file" ] && [ -f "$HOME/.fit/config" ]; then
+        config_file="$HOME/.fit/config"
+    fi
+    
+    if [ -n "$config_file" ] && [ -f "$config_file" ]; then
+        source "$config_file" 2>/dev/null
+        use_github=$(echo "$USE_GITHUB" | tr -d '\r' | xargs)
+        project_manager=$(echo "$PROJECT_MANAGER" | tr -d '\r' | xargs)
+    fi
+    
+    local -a commands
+    commands=(
+        'rebase:sync and rebase onto a branch'
+        'rebase-continue:stage all changes and continue rebase'
+        'rebase-abort:abort in-progress rebase'
+        'commit:create or amend a commit'
+        'uncommit:remove last commit but keep changes'
+        'push:commit, rebase, and force push'
+        'log:display git log in custom format'
+        'branch:fetch and checkout a branch'
+        'default-repository-branch:set repository-specific default branch'
+        'new-branch:create a new branch with formatted name'
+        'stash:stash changes with optional message'
+        'stash-pop:apply and remove stash from list'
+        'stash-apply:apply stash but keep in list'
+        'stash-clear:delete all stashes'
+        'setup:configure git identity and zsh completion'
+        'help:display detailed help information'
+    )
+    
+    if [ "$use_github" = "true" ]; then
+        commands+=('gh-reviews:show PR review status for all branches')
+        commands+=('gh-checks:show CI checks status for all branches')
+    fi
+
+    local state
+    _arguments -C \
+        "1:command:->command" \
+        "*::arg:->args"
+
+    case $state in
+        command)
+            _describe 'fit command' commands
+            ;;
+        args)
+            case $words[1] in
+                rebase)
+                    local -a branches
+                    if command -v git >/dev/null 2>&1; then
+                        branches=($(git branch -r --format='%(refname:short)' 2>/dev/null | sed 's|origin/||' | sort -u))
+                        if [ ${#branches[@]} -gt 0 ]; then
+                            _describe 'branch' branches
+                        fi
+                    fi
+                    ;;
+                branch)
+                    local -a branches
+                    local cache_file=""
+                    if command -v brew >/dev/null 2>&1; then
+                        local brew_prefix=$(brew --prefix 2>/dev/null)
+                        if [ -n "$brew_prefix" ] && [ -f "$brew_prefix/opt/fit/.branch_cache" ]; then
+                            cache_file="$brew_prefix/opt/fit/.branch_cache"
+                        fi
+                    fi
+                    if [ -z "$cache_file" ] && [ -f "$HOME/.fit/.branch_cache" ]; then
+                        cache_file="$HOME/.fit/.branch_cache"
+                    fi
+                    if [ -n "$cache_file" ] && [ -f "$cache_file" ]; then
+                        branches=($(cat "$cache_file" 2>/dev/null))
+                        if [ ${#branches[@]} -gt 0 ]; then
+                            _describe 'branch' branches
+                        fi
+                    elif command -v git >/dev/null 2>&1; then
+                        branches=($(git branch -r --format='%(refname:short)' 2>/dev/null | sed 's|origin/||' | sort -u))
+                        if [ ${#branches[@]} -gt 0 ]; then
+                            _describe 'branch' branches
+                        fi
+                    fi
+                    ;;
+                log)
+                    ;;
+                new-branch)
+                    local -a identificators
+                    identificators=(
+                        'add:add new feature'
+                        'change:modify existing feature'
+                        'update:update existing feature'
+                        'fix:fix bug or issue'
+                        'refactor:refactor code'
+                        'remove:remove feature or code'
+                    )
+                    if [[ ${#words[@]} -eq 2 ]]; then
+                        _describe 'identificator' identificators
+                    elif [[ ${#words[@]} -eq 3 ]]; then
+                        if [[ "$project_manager" = "jira" ]] && command -v jira >/dev/null 2>&1; then
+                            local -a jira_completions
+                            local temp_file
+                            temp_file=$(mktemp 2>/dev/null || echo "/tmp/fit_jira_$$")
+                            
+                            (if command -v timeout >/dev/null 2>&1; then
+                                timeout 3 jira issue list --columns key,summary --no-headers 2>/dev/null
+                            else
+                                jira issue list --columns key,summary --no-headers 2>/dev/null
+                            fi) | head -20 > "$temp_file" 2>/dev/null
+                            
+                            if [ -s "$temp_file" ]; then
+                                while IFS= read -r line || [ -n "$line" ]; do
+                                    line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                                    if [ -n "$line" ]; then
+                                        local key=$(echo "$line" | grep -oE '[A-Z]+-[0-9]+' | head -1)
+                                        if [ -n "$key" ] && [[ ! "$line" =~ ^(KEY|Usage|Error|Failed) ]]; then
+                                            local summary=$(echo "$line" | sed "s/.*${key}[[:space:]]*//" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                                            if [ -n "$summary" ] && [ "$summary" != "$key" ] && [ ${#summary} -gt 0 ]; then
+                                                summary=$(echo "$summary" | sed 's/:/ /g')
+                                                jira_completions+=("${summary}|${key}")
+                                            fi
+                                        fi
+                                    fi
+                                done < "$temp_file"
+                            fi
+                            
+                            rm -f "$temp_file" 2>/dev/null
+                            
+                            if [ ${#jira_completions[@]} -gt 0 ]; then
+                                local -a summaries
+                                local key_map_file="$HOME/.fit/.jira_keys_$$"
+                                rm -f "$key_map_file" 2>/dev/null
+                                
+                                for item in "${jira_completions[@]}"; do
+                                    local summary="${item%%|*}"
+                                    local key="${item##*|}"
+                                    summaries+=("$summary")
+                                    echo "$summary|$key" >> "$key_map_file"
+                                done
+                                
+                                for summary in "${summaries[@]}"; do
+                                    local key=$(grep "^${summary}|" "$key_map_file" 2>/dev/null | cut -d'|' -f2)
+                                    compadd -X "Jira: $key" -- "$summary"
+                                done
+                            else
+                                _message 'commit message'
+                            fi
+                        else
+                            _message 'commit message'
+                        fi
+                    elif [[ ${#words[@]} -eq 4 ]] && [[ $words[(I)-id] -eq 0 ]]; then
+                        if [[ "$project_manager" = "jira" ]]; then
+                            local key_map_file=""
+                            for f in "$HOME/.fit/.jira_keys_"* "/tmp/fit_jira_keys_"*; do
+                                if [[ -f "$f" ]]; then
+                                    key_map_file="$f"
+                                    break
+                                fi
+                            done
+                            
+                            if [[ -n "$key_map_file" ]] && [[ -f "$key_map_file" ]]; then
+                                local selected_summary="$words[3]"
+                                local selected_key=$(grep "^${selected_summary}|" "$key_map_file" 2>/dev/null | cut -d'|' -f2)
+                                if [[ -n "$selected_key" ]]; then
+                                    compadd -- "-id"
+                                else
+                                    _describe 'option' '-id:task identifier'
+                                fi
+                            else
+                                _describe 'option' '-id:task identifier'
+                            fi
+                        else
+                            _describe 'option' '-id:task identifier'
+                        fi
+                    elif [[ $words[(I)-id] -gt 0 ]] && [[ ${#words[@]} -eq $((words[(I)-id] + 1)) ]]; then
+                        if [[ "$project_manager" = "jira" ]]; then
+                            local key_map_file=""
+                            for f in "$HOME/.fit/.jira_keys_"* "/tmp/fit_jira_keys_"*; do
+                                if [[ -f "$f" ]]; then
+                                    key_map_file="$f"
+                                    break
+                                fi
+                            done
+                            
+                            if [[ -n "$key_map_file" ]] && [[ -f "$key_map_file" ]]; then
+                                local selected_summary="$words[3]"
+                                local selected_key=$(grep "^${selected_summary}|" "$key_map_file" 2>/dev/null | cut -d'|' -f2)
+                                if [[ -n "$selected_key" ]]; then
+                                    compadd -- "$selected_key"
+                                else
+                                    _message 'task_id'
+                                fi
+                            else
+                                _message 'task_id'
+                            fi
+                        else
+                            _message 'task_id'
+                        fi
+                    fi
+                    ;;
+                commit|push|stash)
+                    _message
+                    ;;
+                default-repository-branch)
+                    local -a branches
+                    if command -v git >/dev/null 2>&1; then
+                        branches=($(git branch -r --format='%(refname:short)' 2>/dev/null | sed 's|origin/||' | sort -u))
+                        if [ ${#branches[@]} -gt 0 ]; then
+                            _describe 'branch' branches
+                        fi
+                    fi
+                    ;;
+                uncommit|stash-pop|stash-apply|stash-clear|rebase-continue|rebase-abort|gh-reviews|gh-checks)
+                    ;;
+            esac
+            ;;
+    esac
+}

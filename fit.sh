@@ -1,0 +1,2578 @@
+#!/bin/bash
+
+# Color codes
+RED='\033[0;31m'
+TEAL='\033[0;36m'
+GRAY='\033[0;90m'
+CYAN='\033[0;96m'
+YELLOW='\033[0;33m'
+WHITE='\033[0;97m'
+RESET='\033[0m'
+
+# Spinner characters
+SPINNER_CHARS="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+# Global indentation prefix
+INDENT="   "
+
+# Animated spinner function
+spinner() {
+    local pid=$1
+    local message="$2"
+    local spin_idx=0
+    
+    while kill -0 $pid 2>/dev/null; do
+        local spin_char="${SPINNER_CHARS:$spin_idx:1}"
+        printf "\r${INDENT}${TEAL}%-60s${RESET} [${TEAL}${spin_char}${RESET}]" "$message"
+        spin_idx=$(((spin_idx + 1) % ${#SPINNER_CHARS}))
+        sleep 0.1
+    done
+}
+
+# Color helper functions
+error() {
+    echo -e "${INDENT}${INDENT}${RED}$1${RESET}"
+}
+
+action_start() {
+    local message="$1"
+    printf "${INDENT}${TEAL}%-60s${RESET} [${TEAL}⠋${RESET}]" "$message"
+}
+
+action_end() {
+    local message="$1"
+    printf "\r${INDENT}${TEAL}%-60s${RESET} [${TEAL}✓${RESET}]\n" "$message"
+}
+
+action_with_spinner() {
+    local message="$1"
+    shift
+    local temp_file=$(mktemp)
+    
+    action_start "$message"
+    (command "$@" > "$temp_file" 2>&1) &
+    local pid=$!
+    spinner $pid "$message" &
+    local spinner_pid=$!
+    wait $pid
+    local exit_code=$?
+    kill $spinner_pid 2>/dev/null
+    wait $spinner_pid 2>/dev/null
+    printf "\r"
+    action_end "$message"
+    rm -f "$temp_file"
+    return $exit_code
+}
+
+action_with_spinner_and_output() {
+    local message="$1"
+    shift
+    local temp_file=$(mktemp)
+    
+    action_start "$message"
+    (command "$@" > "$temp_file" 2>&1) &
+    local pid=$!
+    spinner $pid "$message" &
+    local spinner_pid=$!
+    wait $pid
+    local exit_code=$?
+    kill $spinner_pid 2>/dev/null
+    wait $spinner_pid 2>/dev/null
+    printf "\r"
+    action_end "$message"
+    
+    while IFS= read -r line || [ -n "$line" ]; do
+        if [ -n "$line" ]; then
+            if [ $exit_code -ne 0 ]; then
+                error "$line"
+            else
+                info "$line"
+            fi
+        fi
+    done < "$temp_file"
+    rm -f "$temp_file"
+    return $exit_code
+}
+
+action() {
+    local message="$1"
+    action_start "$message"
+    action_end "$message"
+}
+
+info() {
+    echo -e "${INDENT}${INDENT}${GRAY}- $1${RESET}"
+}
+
+install_homebrew() {
+    info "Installing Homebrew..."
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    else
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    fi
+    
+    local brew_path=""
+    if [[ "$OSTYPE" == "linux"* ]]; then
+        if [ -d "/home/linuxbrew/.linuxbrew" ]; then
+            eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+            brew_path="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin"
+        elif [ -d "$HOME/.linuxbrew" ]; then
+            eval "$($HOME/.linuxbrew/bin/brew shellenv)"
+            brew_path="$HOME/.linuxbrew/bin:$HOME/.linuxbrew/sbin"
+        fi
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        if [ -d "/opt/homebrew" ]; then
+            brew_path="/opt/homebrew/bin:/opt/homebrew/sbin"
+        elif [ -d "/usr/local" ]; then
+            brew_path="/usr/local/bin:/usr/local/sbin"
+        fi
+    fi
+    
+    if [ -n "$brew_path" ]; then
+        export PATH="$brew_path:$PATH"
+        local shell_config=""
+        if [ -f "$HOME/.zshrc" ]; then
+            shell_config="$HOME/.zshrc"
+        elif [ -f "$HOME/.bashrc" ]; then
+            shell_config="$HOME/.bashrc"
+        elif [ -f "$HOME/.bash_profile" ]; then
+            shell_config="$HOME/.bash_profile"
+        fi
+        
+        if [ -n "$shell_config" ] && ! grep -q "Homebrew" "$shell_config"; then
+            echo "" >> "$shell_config"
+            echo "# Homebrew PATH" >> "$shell_config"
+            if [[ "$OSTYPE" == "linux"* ]]; then
+                if [ -d "/home/linuxbrew/.linuxbrew" ]; then
+                    echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> "$shell_config"
+                elif [ -d "$HOME/.linuxbrew" ]; then
+                    echo 'eval "$($HOME/.linuxbrew/bin/brew shellenv)"' >> "$shell_config"
+                fi
+            elif [[ "$OSTYPE" == "darwin"* ]]; then
+                if [ -d "/opt/homebrew" ]; then
+                    echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$shell_config"
+                elif [ -d "/usr/local" ]; then
+                    echo 'eval "$(/usr/local/bin/brew shellenv)"' >> "$shell_config"
+                fi
+            fi
+        fi
+    fi
+    
+    hash -r
+    if command -v brew >/dev/null 2>&1; then
+        info "Homebrew installed successfully."
+        return 0
+    else
+        error "Homebrew installation failed. Please install it manually."
+        return 1
+    fi
+}
+
+install_go() {
+    info "Installing Go..."
+    
+    if command -v brew >/dev/null 2>&1; then
+        action_with_spinner "Installing Go via Homebrew" brew install go
+        hash -r
+        if command -v go >/dev/null 2>&1; then
+            info "Go installed successfully via Homebrew."
+            return 0
+        fi
+    fi
+    
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        error "Go installation via Homebrew failed. Please install Go manually:"
+        error "  brew install go"
+        return 1
+    elif [[ "$OSTYPE" == "linux"* ]]; then
+        if command -v apt-get >/dev/null 2>&1; then
+            info "Installing Go via apt-get..."
+            if [ "$EUID" -ne 0 ]; then
+                action_with_spinner "Installing Go" sudo apt-get update && sudo apt-get install -y golang-go
+            else
+                action_with_spinner "Installing Go" apt-get update && apt-get install -y golang-go
+            fi
+            hash -r
+            if command -v go >/dev/null 2>&1; then
+                info "Go installed successfully via apt-get."
+                return 0
+            fi
+        elif command -v yum >/dev/null 2>&1; then
+            info "Installing Go via yum..."
+            if [ "$EUID" -ne 0 ]; then
+                action_with_spinner "Installing Go" sudo yum install -y golang
+            else
+                action_with_spinner "Installing Go" yum install -y golang
+            fi
+            hash -r
+            if command -v go >/dev/null 2>&1; then
+                info "Go installed successfully via yum."
+                return 0
+            fi
+        fi
+        
+        error "Go installation via package manager failed. Please install Go manually:"
+        error "  Download from: https://go.dev/dl/"
+        return 1
+    else
+        error "Unsupported OS. Please install Go manually from: https://go.dev/dl/"
+        return 1
+    fi
+}
+
+# Git command wrapper to color output gray
+run_git() {
+    local temp_file=$(mktemp)
+    command git "$@" > "$temp_file" 2>&1
+    local exit_code=$?
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "$line" ] && info "$line"
+    done < "$temp_file"
+    rm -f "$temp_file"
+    return $exit_code
+}
+
+# Cross-platform sed -i helper (works on both macOS and Linux)
+sed_in_place() {
+    local file="$1"
+    shift
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' "$@" "$file"
+    else
+        sed -i "$@" "$file"
+    fi
+}
+
+# Determine fit directory (Homebrew or local installation)
+BREW_PREFIX=""
+if command -v brew >/dev/null 2>&1; then
+    BREW_PREFIX="$(brew --prefix 2>/dev/null)"
+fi
+
+if [[ -n "$BREW_PREFIX" ]] && [[ -f "$BREW_PREFIX/opt/fit/config" ]]; then
+    FIT_DIR="$BREW_PREFIX/opt/fit"
+    FIT_CONFIG="$FIT_DIR/config"
+elif [[ -f "$HOME/.fit/config" ]]; then
+    FIT_DIR="$HOME/.fit"
+    FIT_CONFIG="$HOME/.fit/config"
+else
+    SCRIPT_PATH="$0"
+    if [ -L "$SCRIPT_PATH" ]; then
+        SCRIPT_PATH=$(readlink -f "$SCRIPT_PATH" 2>/dev/null || readlink "$SCRIPT_PATH" 2>/dev/null || echo "$SCRIPT_PATH")
+    fi
+    FIT_DIR="${SCRIPT_PATH%/*}"
+    FIT_CONFIG="$FIT_DIR/config"
+fi
+
+# Create config if it doesn't exist
+if [[ ! -f "$FIT_CONFIG" ]]; then
+    mkdir -p "$(dirname "$FIT_CONFIG")"
+    echo 'DEFAULT_BRANCH="master"' > "$FIT_CONFIG"
+fi
+
+# Load config and trim hidden characters
+source "$FIT_CONFIG"
+DEFAULT_BRANCH=$(echo "$DEFAULT_BRANCH" | tr -d '\r' | xargs)
+GIT_USER_EMAIL=$(echo "$GIT_USER_EMAIL" | tr -d '\r' | xargs)
+GIT_USER_NAME=$(echo "$GIT_USER_NAME" | tr -d '\r' | xargs)
+USE_GITHUB=$(echo "$USE_GITHUB" | tr -d '\r' | xargs)
+PROJECT_MANAGER=$(echo "$PROJECT_MANAGER" | tr -d '\r' | xargs)
+
+# Helper function to get repository identifier from git remote URL
+get_repo_id() {
+    local remote_url=$(git config --get remote.origin.url 2>/dev/null)
+    if [ -z "$remote_url" ]; then
+        echo ""
+        return
+    fi
+    
+    local repo_id=$(echo "$remote_url" | sed -E 's|^https?://[^/]+/||; s|^git@[^:]+:||; s|\.git$||; s|/|_|g; s|[^a-zA-Z0-9_]|_|g')
+    echo "$repo_id"
+}
+
+# Helper function to get default branch (repo-specific first, then global)
+get_default_branch() {
+    local repo_id=$(get_repo_id)
+    local repo_default=""
+    
+    if [ -n "$repo_id" ] && [ -f "$FIT_CONFIG" ]; then
+        local repo_key="REPO_DEFAULT_BRANCH_${repo_id}"
+        local repo_line=$(grep "^${repo_key}=" "$FIT_CONFIG" 2>/dev/null | head -n 1)
+        if [ -n "$repo_line" ]; then
+            repo_default=$(echo "$repo_line" | sed -E 's/^[^=]*="([^"]*)".*/\1/' | sed -E "s/^[^=]*='([^']*)'.*/\1/")
+            repo_default=$(echo "$repo_default" | tr -d '\r' | xargs)
+        fi
+    fi
+    
+    if [ -n "$repo_default" ]; then
+        echo "$repo_default"
+    else
+        echo "$DEFAULT_BRANCH"
+    fi
+}
+
+COMMAND=$1
+UNSAFE_FLAG=false
+TASK_ID=""
+ARG1=""
+ARG2=""
+
+# Parse arguments, handling -id and -unsafe flags
+shift
+i=1
+while [ $i -le $# ]; do
+    arg="${!i}"
+    case "$arg" in
+        -unsafe)
+            UNSAFE_FLAG=true
+            ;;
+        -id)
+            if [ $i -lt $# ]; then
+                i=$((i + 1))
+                TASK_ID="${!i}"
+            fi
+            ;;
+        *)
+            if [ -z "$ARG1" ]; then
+                ARG1="$arg"
+            elif [ -z "$ARG2" ]; then
+                ARG2="$arg"
+            fi
+            ;;
+    esac
+    i=$((i + 1))
+done
+
+# Helper function to check and set git identity
+check_git_identity() {
+    if [ -z "$GIT_USER_EMAIL" ] || [ -z "$GIT_USER_NAME" ]; then
+        error "ERROR: Git user identity not configured! Please run: fit setup"
+        exit 1
+    fi
+    
+    git config user.email "$GIT_USER_EMAIL"
+    git config user.name "$GIT_USER_NAME"
+}
+
+# Helper function to check if local branch has new commits compared to origin
+check_origin() {
+    if [ "$UNSAFE_FLAG" = "true" ]; then
+        return 0
+    fi
+    
+    local default_branch=$(get_default_branch)
+    action_with_spinner "Checking origin/$default_branch" git fetch --all --prune
+    
+    local current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+    if [ -z "$current_branch" ]; then
+        return 0
+    fi
+    
+    local origin_ref="origin/$default_branch"
+    if ! git rev-parse --verify "$origin_ref" >/dev/null 2>&1; then
+        return 0
+    fi
+    
+    local local_commit=$(git rev-parse HEAD 2>/dev/null)
+    local origin_commit=$(git rev-parse "$origin_ref" 2>/dev/null)
+    
+    if [ -z "$local_commit" ] || [ -z "$origin_commit" ]; then
+        return 0
+    fi
+    
+    if git merge-base --is-ancestor "$origin_commit" "$local_commit" 2>/dev/null; then
+        local ahead=$(git rev-list --count "$origin_commit".."$local_commit" 2>/dev/null)
+        if [ "$ahead" -eq 0 ]; then
+            error "ERROR:  Action not permitted. There are no new changes in this branch. If you want to side step this check use the -unsafe flag."
+            exit 1
+        fi
+    else
+        return 0
+    fi
+}
+
+# Helper function to run rebase logic
+do_commit() {
+    local commit_message="$1"
+    
+    action_with_spinner "Staging All Changes" git add -A
+    
+    if [ -z "$commit_message" ]; then
+        check_origin
+        action_with_spinner_and_output "Amending Commit" git commit --amend --no-edit --allow-empty
+    else
+        action_with_spinner_and_output "Creating New Commit" git commit -m "$commit_message" --allow-empty
+    fi
+}
+
+save_branch_cache() {
+    local cache_file="$FIT_DIR/.branch_cache"
+    git branch -r --format='%(refname:short)' 2>/dev/null | sed 's|origin/||' | sort -u > "$cache_file" 2>/dev/null || true
+}
+
+# Helper function to format commit message to branch name (lowercase, hyphen-separated)
+format_commit_for_branch() {
+    echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g'
+}
+
+# Helper function to get past tense of identificator
+get_past_tense() {
+    case "$1" in
+        add) echo "Added" ;;
+        change) echo "Changed" ;;
+        update) echo "Updated" ;;
+        fix) echo "Fixed" ;;
+        refactor) echo "Refactored" ;;
+        remove) echo "Removed" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+# Helper function to capitalize first letter
+capitalize() {
+    echo "$1" | sed 's/^./\U&/'
+}
+
+do_rebase() {
+    local default_branch=$(get_default_branch)
+    local target=${1:-$default_branch}
+    action_with_spinner "Syncing with origin/$target" git fetch --all --prune
+    save_branch_cache
+    local rebase_exit_code
+    action_with_spinner_and_output "Rebasing with origin/$target" git rebase "origin/$target"
+    rebase_exit_code=$?
+    if [ $rebase_exit_code -ne 0 ]; then
+        return $rebase_exit_code
+    fi
+}
+
+# Helper function to display git log
+show_log() {
+    local log_args=()
+    for arg in "$@"; do
+        if [ "$arg" != "-unsafe" ]; then
+            log_args+=("$arg")
+        fi
+    done
+    
+    git log --format="%ai|%an|%ae|%h|%s" "${log_args[@]}" | while IFS='|' read -r date author email commit_id message; do
+        local formatted_date=$(echo "$date" | awk '{print $1 " " substr($2, 1, 5)}')
+        echo -e "${YELLOW}[${formatted_date}]${RESET} ${CYAN}${author} <${email}>${RESET} ${GRAY}${commit_id}${RESET}"
+        echo -e "${INDENT}${INDENT}${WHITE}- ${message}${RESET}"
+        echo
+    done | less -R
+}
+
+show_stash_list_and_select() {
+    local stash_count=$(git stash list 2>/dev/null | wc -l | tr -d ' ')
+    if [ -z "$stash_count" ] || [ "$stash_count" -eq 0 ]; then
+        info "No stashes found." >&2
+        return 1
+    fi
+    
+    echo "" >&2
+    echo -e "${TEAL}Stash List:${RESET}" >&2
+    echo "" >&2
+    
+    local index=0
+    while [ $index -lt "$stash_count" ]; do
+        local stash_ref="stash@{$index}"
+        local stash_info=$(git log --format="%ad|%s" --date=local -1 "$stash_ref" 2>/dev/null)
+        
+        if [ -z "$stash_info" ]; then
+            index=$((index + 1))
+            continue
+        fi
+        
+        local date=$(echo "$stash_info" | cut -d'|' -f1)
+        local message=$(echo "$stash_info" | cut -d'|' -f2-)
+        local branch=""
+        local stash_message=""
+        
+        if echo "$message" | grep -q "^WIP on"; then
+            branch=$(echo "$message" | sed -n 's/^WIP on \([^:]*\):.*/\1/p')
+            stash_message=$(echo "$message" | sed -n 's/^WIP on [^:]*: [^ ]* \(.*\)/\1/p')
+        elif echo "$message" | grep -q "^On "; then
+            branch=$(echo "$message" | sed -n 's/^On \([^:]*\):.*/\1/p')
+            stash_message=$(echo "$message" | sed -n 's/^On [^:]*: \(.*\)/\1/p')
+        else
+            branch=$(git log --format="%D" -1 "$stash_ref" 2>/dev/null | grep -oE "HEAD -> [^,)]*" | sed 's/HEAD -> //' | head -1)
+            if [ -z "$branch" ]; then
+                branch="unknown"
+            fi
+            stash_message="$message"
+        fi
+        
+        if [ -z "$stash_message" ]; then
+            stash_message="(no message)"
+        fi
+        
+        echo -e "${INDENT}${CYAN}[$index] stash@{$index}${RESET}" >&2
+        echo -e "${INDENT}${INDENT}${YELLOW}Date:${RESET} ${GRAY}$date${RESET}" >&2
+        echo -e "${INDENT}${INDENT}${YELLOW}Branch:${RESET} ${GRAY}$branch${RESET}" >&2
+        echo -e "${INDENT}${INDENT}${YELLOW}Message:${RESET} ${GRAY}$stash_message${RESET}" >&2
+        echo "" >&2
+        
+        index=$((index + 1))
+    done
+    
+    echo -e "${TEAL}Select a stash (0-$((stash_count - 1))):${RESET} " >&2
+    read -r selected_index < /dev/tty
+    
+    if [ -z "$selected_index" ]; then
+        info "No selection made. Exiting." >&2
+        return 1
+    fi
+    
+    if ! [[ "$selected_index" =~ ^[0-9]+$ ]] || [ "$selected_index" -lt 0 ] || [ "$selected_index" -ge "$stash_count" ]; then
+        error "Invalid selection. Please enter a number between 0 and $((stash_count - 1))." >&2
+        return 1
+    fi
+    
+    echo "$selected_index"
+    return 0
+}
+
+show_help() {
+    echo -e "${WHITE}fit - Git workflow automation tool${RESET}"
+    echo ""
+    echo -e "${TEAL}COMMANDS:${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit rebase [branch]${RESET}"
+    echo -e "${INDENT}${GRAY}Syncs and rebases the current branch onto the specified branch (defaults to repository-specific or global DEFAULT_BRANCH).${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- branch (optional): Target branch to rebase onto. Defaults to repository-specific default branch (if set) or global DEFAULT_BRANCH from config.${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git fetch --all --prune${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git rebase origin/<branch>${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit rebase-continue${RESET}"
+    echo -e "${INDENT}${GRAY}Stages all changes and continues an interrupted rebase.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- None${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git add -A${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git rebase --continue${RESET}"
+    echo -e "${INDENT}${GRAY}Note:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Only works when a rebase is in progress${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit rebase-abort${RESET}"
+    echo -e "${INDENT}${GRAY}Aborts an in-progress rebase and restores the branch to its state before the rebase started.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- None${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git rebase --abort${RESET}"
+    echo -e "${INDENT}${GRAY}Note:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Only works when a rebase is in progress${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit branch <branch-name>${RESET}"
+    echo -e "${INDENT}${GRAY}Fetches all remotes and checks out the specified branch.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- branch-name (required): Name of the branch to checkout.${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git fetch --all --prune${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git checkout <branch-name>${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit default-repository-branch <branch-name>${RESET}"
+    echo -e "${INDENT}${GRAY}Sets a repository-specific default branch for the current repository.${RESET}"
+    echo -e "${INDENT}${GRAY}This overrides the global DEFAULT_BRANCH for this repository only.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- branch-name (required): Default branch name for this repository.${RESET}"
+    echo -e "${INDENT}${GRAY}Configuration:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Saved to config file as REPO_DEFAULT_BRANCH_<repo-id>${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Repository ID is derived from git remote origin URL${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit new-branch <identificator> \"commit message\" [-id task_id]${RESET}"
+    echo -e "${INDENT}${GRAY}Creates a new branch with a formatted name and an empty commit.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- identificator (required): One of: add, change, update, fix, refactor, remove${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- commit message (required): The commit message for the initial commit${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- -id task_id (optional): Task identifier to prefix the branch name${RESET}"
+    echo -e "${INDENT}${GRAY}Branch name format:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- With task_id: {task_id}_{identificator}-{formatted-commit-message}${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Without task_id: {identificator}-{formatted-commit-message}${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git checkout -b <branch-name>${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git commit --allow-empty -m \"<past-tense-identificator> <commit-message>\"${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit log [git-log-args]${RESET}"
+    echo -e "${INDENT}${GRAY}Displays git log in a custom formatted, colorized view with pager support.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git-log-args (optional): Any arguments accepted by git log (e.g., -n 10, --oneline, etc.)${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git log --format=\"%ai|%an|%ae|%h|%s\" [args]${RESET}"
+    echo -e "${INDENT}${GRAY}Output format:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}[date] author <email> commit_id${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}   - Commit message${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit stash [message]${RESET}"
+    echo -e "${INDENT}${GRAY}Stashes the current working directory changes.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- message (optional): Stash message. If omitted, stashes without a message.${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git stash push -m \"<message>\" (if message provided)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git stash push (if no message)${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit stash-pop${RESET}"
+    echo -e "${INDENT}${GRAY}Displays a formatted list of all stashes and prompts you to select one.${RESET}"
+    echo -e "${INDENT}${GRAY}Applies the selected stash and removes it from the stash list.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- None (interactive selection)${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git log --format=\"%ad|%s\" --date=local -1 stash@{index}${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git stash pop stash@{selected_index}${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit stash-apply${RESET}"
+    echo -e "${INDENT}${GRAY}Displays a formatted list of all stashes and prompts you to select one.${RESET}"
+    echo -e "${INDENT}${GRAY}Applies the selected stash but keeps it in the stash list.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- None (interactive selection)${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git log --format=\"%ad|%s\" --date=local -1 stash@{index}${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git stash apply stash@{selected_index}${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit stash-clear${RESET}"
+    echo -e "${INDENT}${GRAY}Deletes all stashes after confirmation.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- None (interactive confirmation)${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git stash clear${RESET}"
+    echo ""
+    
+    if [ "$USE_GITHUB" = "true" ]; then
+        echo -e "${CYAN}fit gh-reviews${RESET}"
+        echo -e "${INDENT}${GRAY}Displays all branches and their pull request review status.${RESET}"
+        echo -e "${INDENT}${GRAY}Shows: pending, approved, or changes requested.${RESET}"
+        echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+        echo -e "${INDENT}${INDENT}${GRAY}- None${RESET}"
+        echo -e "${INDENT}${GRAY}GitHub CLI commands executed:${RESET}"
+        echo -e "${INDENT}${INDENT}${GRAY}- gh pr list --repo <repo> --head <branch>${RESET}"
+        echo -e "${INDENT}${INDENT}${GRAY}- gh pr view <number> --repo <repo>${RESET}"
+        echo ""
+        
+        echo -e "${CYAN}fit gh-checks${RESET}"
+        echo -e "${INDENT}${GRAY}Displays all branches and their CI checks status.${RESET}"
+        echo -e "${INDENT}${GRAY}Shows: passed, failed, or pending checks for each PR.${RESET}"
+        echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+        echo -e "${INDENT}${INDENT}${GRAY}- None${RESET}"
+        echo -e "${INDENT}${GRAY}GitHub CLI commands executed:${RESET}"
+        echo -e "${INDENT}${INDENT}${GRAY}- gh pr list --repo <repo> --head <branch>${RESET}"
+        echo -e "${INDENT}${INDENT}${GRAY}- gh pr checks <number> --repo <repo>${RESET}"
+        echo ""
+    fi
+    
+    echo -e "${CYAN}fit commit [message] [-unsafe]${RESET}"
+    echo -e "${INDENT}${GRAY}Stages all changes and creates a new commit or amends the last commit.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- message (optional): Commit message. If omitted, amends the last commit.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- -unsafe (optional): Bypasses the safety check for new commits when amending.${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git add -A${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git commit -m \"<message>\" --allow-empty (if message provided)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git commit --amend --no-edit --allow-empty (if no message)${RESET}"
+    echo -e "${INDENT}${GRAY}Safety check:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Verifies local branch has new commits compared to origin/<default-branch> (when amending, unless -unsafe flag is used)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Default branch is repository-specific (if set) or global DEFAULT_BRANCH${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit uncommit [-unsafe]${RESET}"
+    echo -e "${INDENT}${GRAY}Removes the last commit from history but keeps all changes in the staging area (soft reset).${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- -unsafe (optional): Bypasses the safety check for new commits.${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git reset --soft HEAD~1${RESET}"
+    echo -e "${INDENT}${GRAY}Safety check:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Verifies local branch has new commits compared to origin/<default-branch> (unless -unsafe flag is used)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Default branch is repository-specific (if set) or global DEFAULT_BRANCH${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit push [message] [-unsafe]${RESET}"
+    echo -e "${INDENT}${GRAY}Commits (or amends), rebases, and force pushes the current branch.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- message (optional): Commit message. If omitted, amends the last commit.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- -unsafe (optional): Bypasses the safety check for new commits when amending.${RESET}"
+    echo -e "${INDENT}${GRAY}Commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- fit commit [message] [-unsafe]${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- fit rebase${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git push --force --set-upstream origin <branch>${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit temp [message]${RESET}"
+    echo -e "${INDENT}${GRAY}Creates temporary commits that can be squashed later with 'fit ship'.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- message (optional): Base message for a new temp commit stack. If omitted, adds to the existing temp commit stack.${RESET}"
+    echo -e "${INDENT}${GRAY}Behavior:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- With message: Creates a new temp commit stack. Prompts for additional temp commit message.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}  Format: [temp] <base-message> | <temp-message> (or [temp] <base-message> if temp message is empty)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Without message: Adds to existing temp commit stack if last commit is a temp commit.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}  If last commit is not a temp commit, stashes uncommitted changes, uncommits the last commit,${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}  recommits it as [temp] <previous-message>, then continues with normal temp logic.${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git add -A${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git commit -m \"[temp] <message>\" --allow-empty${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit ship${RESET}"
+    echo -e "${INDENT}${GRAY}Squashes all temp commit stacks into single commits and pushes.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- None${RESET}"
+    echo -e "${INDENT}${GRAY}Behavior:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Identifies all temp commit stacks (consecutive temp commits with the same base message)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Squashes each stack into a single commit with just the base message${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Preserves non-temp commits as-is${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Executes fit push after squashing${RESET}"
+    echo -e "${INDENT}${GRAY}Commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- fit rebase${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git push --force --set-upstream origin <branch>${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit setup${RESET}"
+    echo -e "${INDENT}${GRAY}Configures git identity, default branch, shell completion, and creates command aliases.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- None (interactive prompts)${RESET}"
+    echo -e "${INDENT}${GRAY}Configuration saved to:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- ~/.fit/config (or \$BREW_PREFIX/opt/fit/config for Homebrew)${RESET}"
+    echo -e "${INDENT}${GRAY}Actions performed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Prompts for DEFAULT_BRANCH if not configured${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Prompts for GIT_USER_EMAIL if not configured${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Prompts for GIT_USER_NAME if not configured${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Sets up zsh completion in ~/.zshrc (if ~/.zshrc exists)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Sets up bash completion in ~/.bashrc or /etc/bash_completion.d (if available)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Creates aliases (f-rebase, f-commit, f-push, etc.) in ~/.zshrc${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit help${RESET}"
+    echo -e "${INDENT}${GRAY}Displays this help message with detailed information about all commands.${RESET}"
+    echo ""
+    
+    echo -e "${TEAL}GLOBAL FLAGS:${RESET}"
+    echo ""
+    echo -e "${CYAN}-unsafe${RESET}"
+    echo -e "${INDENT}${GRAY}Bypasses the safety check that prevents operations when there are no new commits${RESET}"
+    echo -e "${INDENT}${GRAY}compared to origin/<default-branch>. Can be used with: commit, uncommit, push.${RESET}"
+    echo -e "${INDENT}${GRAY}Default branch is repository-specific (if set) or global DEFAULT_BRANCH.${RESET}"
+    echo ""
+    
+    echo -e "${TEAL}SAFETY CHECKS:${RESET}"
+    echo ""
+    echo -e "${INDENT}${GRAY}The check_origin() function verifies that the local branch has new commits${RESET}"
+    echo -e "${INDENT}${GRAY}compared to origin/<default-branch>. It uses:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git rev-parse HEAD${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git rev-parse origin/<default-branch>${RESET}"
+    echo -e "${INDENT}${GRAY}Default branch is repository-specific (if set via fit default-repository-branch) or global DEFAULT_BRANCH.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git merge-base --is-ancestor${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git rev-list --count${RESET}"
+    echo ""
+}
+
+case "$COMMAND" in
+    help)
+        show_help
+        ;;
+    
+    rebase)
+        do_rebase "$ARG1"
+        ;;
+
+    rebase-continue)
+        if ! git rev-parse --git-dir >/dev/null 2>&1; then
+            error "ERROR: Not in a git repository!"
+            exit 1
+        fi
+        
+        if [ ! -d "$(git rev-parse --git-path rebase-merge)" ] && [ ! -d "$(git rev-parse --git-path rebase-apply)" ]; then
+            error "ERROR: No rebase in progress!"
+            exit 1
+        fi
+        
+        action_with_spinner "Staging All Changes" git add -A
+        action_with_spinner_and_output "Continuing Rebase" git rebase --continue
+        ;;
+
+    rebase-abort)
+        if ! git rev-parse --git-dir >/dev/null 2>&1; then
+            error "ERROR: Not in a git repository!"
+            exit 1
+        fi
+        
+        if [ ! -d "$(git rev-parse --git-path rebase-merge)" ] && [ ! -d "$(git rev-parse --git-path rebase-apply)" ]; then
+            error "ERROR: No rebase in progress!"
+            exit 1
+        fi
+        
+        action_with_spinner_and_output "Aborting Rebase" git rebase --abort
+        ;;
+
+    branch)
+        if [ -z "$ARG1" ]; then
+            error "Usage: fit branch <branch-name>"
+            exit 1
+        fi
+        action_with_spinner "Fetching All Remotes" git fetch --all --prune
+        save_branch_cache
+        action_with_spinner_and_output "Checking Out Branch" git checkout "$ARG1"
+        ;;
+
+    default-repository-branch)
+        if [ -z "$ARG1" ]; then
+            error "Usage: fit default-repository-branch <branch-name>"
+            exit 1
+        fi
+        
+        if ! git rev-parse --git-dir >/dev/null 2>&1; then
+            error "ERROR: Not in a git repository!"
+            exit 1
+        fi
+        
+        repo_id=$(get_repo_id)
+        if [ -z "$repo_id" ]; then
+            error "ERROR: Could not determine repository identifier. Make sure you have a remote 'origin' configured."
+            exit 1
+        fi
+        
+        repo_key="REPO_DEFAULT_BRANCH_${repo_id}"
+        branch_name="$ARG1"
+        
+        if ! grep -q "^${repo_key}=" "$FIT_CONFIG" 2>/dev/null; then
+            echo "${repo_key}=\"${branch_name}\"" >> "$FIT_CONFIG"
+            info "Repository-specific default branch set to: $branch_name"
+        else
+            sed_in_place "$FIT_CONFIG" "s|^${repo_key}=.*|${repo_key}=\"${branch_name}\"|"
+            info "Repository-specific default branch updated to: $branch_name"
+        fi
+        ;;
+
+    new-branch)
+        if [ -z "$ARG1" ] || [ -z "$ARG2" ]; then
+            error "Usage: fit new-branch <identificator> \"commit message\" [-id task_id]"
+            error "Identificator must be one of: add, change, update, fix, refactor, remove"
+            exit 1
+        fi
+        
+        # Validate identificator
+        case "$ARG1" in
+            add|change|update|fix|refactor|remove)
+                ;;
+            *)
+                error "Invalid identificator: $ARG1"
+                error "Must be one of: add, change, update, fix, refactor, remove"
+                exit 1
+                ;;
+        esac
+        
+        check_git_identity
+        
+        commit_message_input="$ARG2"
+        jira_issue_key=""
+        
+        if [ "$PROJECT_MANAGER" = "jira" ] && command -v jira >/dev/null 2>&1; then
+            if echo "$commit_message_input" | grep -qE '^[A-Z]+-[0-9]+(:.*)?$'; then
+                jira_issue_key=$(echo "$commit_message_input" | sed 's/:.*$//' | awk '{print $1}')
+                
+                if [ -z "$TASK_ID" ]; then
+                    TASK_ID="$jira_issue_key"
+                fi
+                
+                if echo "$commit_message_input" | grep -q ':'; then
+                    commit_message_input=$(echo "$commit_message_input" | sed 's/^[^:]*:[[:space:]]*//')
+                    if [ -z "$commit_message_input" ]; then
+                        action_with_spinner "Fetching Jira Issue" jira issue view "$jira_issue_key" --columns summary --no-headers > /tmp/fit_jira_issue.txt 2>&1
+                        if [ $? -eq 0 ] && [ -s /tmp/fit_jira_issue.txt ]; then
+                            commit_message_input=$(cat /tmp/fit_jira_issue.txt | head -1 | xargs)
+                            info "Using Jira issue summary: $commit_message_input"
+                        fi
+                        rm -f /tmp/fit_jira_issue.txt
+                    fi
+                else
+                    action_with_spinner "Fetching Jira Issue" jira issue view "$jira_issue_key" --columns summary --no-headers > /tmp/fit_jira_issue.txt 2>&1
+                    if [ $? -eq 0 ] && [ -s /tmp/fit_jira_issue.txt ]; then
+                        commit_message_input=$(cat /tmp/fit_jira_issue.txt | head -1 | xargs)
+                        info "Using Jira issue summary: $commit_message_input"
+                    fi
+                    rm -f /tmp/fit_jira_issue.txt
+                fi
+            fi
+        fi
+        
+        # Format branch name
+        formatted_commit=$(format_commit_for_branch "$commit_message_input")
+        if [ -n "$TASK_ID" ]; then
+            branch_name="${TASK_ID}_${ARG1}-${formatted_commit}"
+        else
+            branch_name="${ARG1}-${formatted_commit}"
+        fi
+        
+        # Format commit message
+        past_tense=$(get_past_tense "$ARG1")
+        commit_message="${past_tense} $commit_message_input"
+        
+        # Create and checkout new branch
+        action_with_spinner_and_output "Creating New Branch" git checkout -b "$branch_name"
+        
+        # Create empty commit
+        action_with_spinner_and_output "Creating Empty Commit" git commit --allow-empty -m "$commit_message"
+        ;;
+
+    log)
+        show_log "$@"
+        ;;
+
+    stash)
+        if [ -n "$ARG1" ]; then
+            action_with_spinner_and_output "Stashing Changes" git stash push -m "$ARG1"
+        else
+            action_with_spinner_and_output "Stashing Changes" git stash push
+        fi
+        ;;
+
+    stash-pop)
+        selected_index=$(show_stash_list_and_select)
+        if [ $? -ne 0 ]; then
+            exit 0
+        fi
+        stash_ref="stash@{$selected_index}"
+        action_with_spinner_and_output "Popping Stash" git stash pop "$stash_ref"
+        ;;
+
+    stash-apply)
+        selected_index=$(show_stash_list_and_select)
+        if [ $? -ne 0 ]; then
+            exit 0
+        fi
+        stash_ref="stash@{$selected_index}"
+        action_with_spinner_and_output "Applying Stash" git stash apply "$stash_ref"
+        ;;
+
+    stash-clear)
+        stash_count=$(git stash list 2>/dev/null | wc -l | tr -d ' ')
+        if [ -z "$stash_count" ] || [ "$stash_count" -eq 0 ]; then
+            info "No stashes found."
+            exit 0
+        fi
+        
+        echo ""
+        echo -e "${TEAL}Warning: This will delete all $stash_count stash(es).${RESET}"
+        echo -e "${TEAL}This action cannot be undone.${RESET}"
+        echo ""
+        echo -e "${TEAL}Are you sure you want to delete all stashes? (yes/no):${RESET} "
+        read -r confirmation < /dev/tty
+        
+        if [ "$confirmation" != "yes" ]; then
+            info "Operation cancelled."
+            exit 0
+        fi
+        
+        action_with_spinner_and_output "Clearing All Stashes" git stash clear
+        info "All stashes have been deleted."
+        ;;
+
+    gh-reviews)
+        if [ "$USE_GITHUB" != "true" ]; then
+            error "GitHub integration is not enabled. Run 'fit setup' to enable it."
+            exit 1
+        fi
+        
+        if ! command -v gh >/dev/null 2>&1; then
+            error "GitHub CLI (gh) is not installed."
+            exit 1
+        fi
+        
+        if ! gh auth status >/dev/null 2>&1; then
+            error "Not authenticated with GitHub. Run 'gh auth login' or 'fit setup'."
+            exit 1
+        fi
+        
+        repo=$(git remote get-url origin 2>/dev/null | sed -E 's/.*github\.com[:/]([^/]+\/[^/]+)(\.git)?$/\1/' | sed 's/\.git$//')
+        if [ -z "$repo" ]; then
+            error "Could not determine GitHub repository. Make sure you're in a git repository with a GitHub remote."
+            exit 1
+        fi
+        
+        echo ""
+        echo -e "${TEAL}Pull Request Reviews for: ${repo}${RESET}"
+        echo ""
+        
+        branches=$(git branch -r --format='%(refname:short)' 2>/dev/null | sed 's|origin/||' | grep -v HEAD | sort -u)
+        
+        for branch in $branches; do
+            pr_json=$(gh pr list --repo "$repo" --head "$branch" --json number,title,state,reviews 2>/dev/null)
+            
+            if [ -z "$pr_json" ] || [ "$pr_json" = "[]" ]; then
+                continue
+            fi
+            
+            pr_number=$(echo "$pr_json" | grep -o '"number":[0-9]*' | head -1 | cut -d':' -f2)
+            pr_title=$(echo "$pr_json" | grep -o '"title":"[^"]*"' | head -1 | sed 's/"title":"\([^"]*\)"/\1/')
+            
+            if [ -z "$pr_number" ]; then
+                continue
+            fi
+            
+            reviews_json=$(gh pr view "$pr_number" --repo "$repo" --json reviews 2>/dev/null)
+            
+            review_state="pending"
+            if echo "$reviews_json" | grep -q '"state":"APPROVED"'; then
+                if ! echo "$reviews_json" | grep -q '"state":"CHANGES_REQUESTED"'; then
+                    review_state="approved"
+                fi
+            fi
+            if echo "$reviews_json" | grep -q '"state":"CHANGES_REQUESTED"'; then
+                review_state="changes requested"
+            fi
+            
+            echo -e "${INDENT}${CYAN}$branch${RESET}"
+            if [ -n "$pr_title" ]; then
+                echo -e "${INDENT}${INDENT}${GRAY}PR #$pr_number: $pr_title${RESET}"
+            else
+                echo -e "${INDENT}${INDENT}${GRAY}PR #$pr_number${RESET}"
+            fi
+            case "$review_state" in
+                approved)
+                    echo -e "${INDENT}${INDENT}${YELLOW}Review State:${RESET} ${GRAY}approved${RESET}"
+                    ;;
+                "changes requested")
+                    echo -e "${INDENT}${INDENT}${YELLOW}Review State:${RESET} ${RED}changes requested${RESET}"
+                    ;;
+                *)
+                    echo -e "${INDENT}${INDENT}${YELLOW}Review State:${RESET} ${GRAY}pending${RESET}"
+                    ;;
+            esac
+            echo ""
+        done
+        ;;
+
+    gh-checks)
+        if [ "$USE_GITHUB" != "true" ]; then
+            error "GitHub integration is not enabled. Run 'fit setup' to enable it."
+            exit 1
+        fi
+        
+        if ! command -v gh >/dev/null 2>&1; then
+            error "GitHub CLI (gh) is not installed."
+            exit 1
+        fi
+        
+        if ! gh auth status >/dev/null 2>&1; then
+            error "Not authenticated with GitHub. Run 'gh auth login' or 'fit setup'."
+            exit 1
+        fi
+        
+        repo=$(git remote get-url origin 2>/dev/null | sed -E 's/.*github\.com[:/]([^/]+\/[^/]+)(\.git)?$/\1/' | sed 's/\.git$//')
+        if [ -z "$repo" ]; then
+            error "Could not determine GitHub repository. Make sure you're in a git repository with a GitHub remote."
+            exit 1
+        fi
+        
+        echo ""
+        echo -e "${TEAL}CI Checks Status for: ${repo}${RESET}"
+        echo ""
+        
+        branches=$(git branch -r --format='%(refname:short)' 2>/dev/null | sed 's|origin/||' | grep -v HEAD | sort -u)
+        
+        for branch in $branches; do
+            pr_json=$(gh pr list --repo "$repo" --head "$branch" --json number,title,state 2>/dev/null)
+            
+            if [ -z "$pr_json" ] || [ "$pr_json" = "[]" ]; then
+                continue
+            fi
+            
+            pr_number=$(echo "$pr_json" | grep -o '"number":[0-9]*' | head -1 | cut -d':' -f2)
+            pr_title=$(echo "$pr_json" | grep -o '"title":"[^"]*"' | head -1 | sed 's/"title":"\([^"]*\)"/\1/')
+            
+            if [ -z "$pr_number" ]; then
+                continue
+            fi
+            
+            checks_json=$(gh pr checks "$pr_number" --repo "$repo" --json name,state,bucket 2>/dev/null)
+            
+            if [ -z "$checks_json" ] || [ "$checks_json" = "[]" ]; then
+                continue
+            fi
+            
+            echo -e "${INDENT}${CYAN}$branch${RESET}"
+            if [ -n "$pr_title" ]; then
+                echo -e "${INDENT}${INDENT}${GRAY}PR #$pr_number: $pr_title${RESET}"
+            else
+                echo -e "${INDENT}${INDENT}${GRAY}PR #$pr_number${RESET}"
+            fi
+            
+            if command -v jq >/dev/null 2>&1; then
+                check_count=$(echo "$checks_json" | jq 'length' 2>/dev/null || echo "0")
+                if [ "$check_count" = "0" ]; then
+                    echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${GRAY}No checks found${RESET}"
+                else
+                    pass_count=$(echo "$checks_json" | jq '[.[] | select(.bucket == "pass")] | length' 2>/dev/null || echo "0")
+                    fail_count=$(echo "$checks_json" | jq '[.[] | select(.bucket == "fail")] | length' 2>/dev/null || echo "0")
+                    pending_count=$(echo "$checks_json" | jq '[.[] | select(.bucket == "pending")] | length' 2>/dev/null || echo "0")
+                    
+                    if [ "$fail_count" -gt 0 ]; then
+                        echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${RED}failed ($fail_count)${RESET}"
+                    elif [ "$pending_count" -gt 0 ]; then
+                        echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${YELLOW}pending ($pending_count)${RESET}"
+                    elif [ "$pass_count" -eq "$check_count" ]; then
+                        echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${GRAY}passed ($pass_count/$check_count)${RESET}"
+                    else
+                        echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${GRAY}partial ($pass_count/$check_count)${RESET}"
+                    fi
+                fi
+            else
+                check_lines=$(echo "$checks_json" | grep -c '"name"' 2>/dev/null || echo "0")
+                if [ "$check_lines" -eq 0 ]; then
+                    echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${GRAY}No checks found${RESET}"
+                else
+                    pass_count=$(echo "$checks_json" | grep -o '"bucket":"pass"' | wc -l)
+                    fail_count=$(echo "$checks_json" | grep -o '"bucket":"fail"' | wc -l)
+                    pending_count=$(echo "$checks_json" | grep -o '"bucket":"pending"' | wc -l)
+                    
+                    if [ "$fail_count" -gt 0 ]; then
+                        echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${RED}failed ($fail_count)${RESET}"
+                    elif [ "$pending_count" -gt 0 ]; then
+                        echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${YELLOW}pending ($pending_count)${RESET}"
+                    elif [ "$pass_count" -eq "$check_lines" ]; then
+                        echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${GRAY}passed ($pass_count/$check_lines)${RESET}"
+                    else
+                        echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${GRAY}partial ($pass_count/$check_lines)${RESET}"
+                    fi
+                fi
+            fi
+            echo ""
+        done
+        ;;
+
+    check-unsafe)
+        error "ERROR: This command has been disabled."
+        exit 1
+        ;;
+
+    commit)
+        check_git_identity
+        do_commit "$ARG1"
+        ;;
+
+    uncommit)
+        check_origin
+        action_with_spinner_and_output "Removing Last Commit (soft reset)" git reset --soft HEAD~1
+        info "Last commit removed. Changes are preserved in staging area."
+        ;;
+
+    temp)
+        check_git_identity
+        
+        if ! git rev-parse --git-dir >/dev/null 2>&1; then
+            error "ERROR: Not in a git repository!"
+            exit 1
+        fi
+        
+        if [ -n "$ARG1" ]; then
+            base_message="$ARG1"
+            echo -e "${TEAL}Enter Temp commit message:${RESET} "
+            read -r temp_message < /dev/tty
+            
+            if [ -n "$temp_message" ] && [ -n "$(echo "$temp_message" | tr -d '[:space:]')" ]; then
+                commit_message="[temp] $base_message | $temp_message"
+            else
+                commit_message="[temp] $base_message"
+            fi
+            
+            action_with_spinner "Staging All Changes" git add -A
+            action_with_spinner_and_output "Creating Temp Commit" git commit -m "$commit_message" --allow-empty
+        else
+            last_commit_message=$(git log -1 --format="%s" HEAD 2>/dev/null)
+            
+            if [ -z "$last_commit_message" ]; then
+                error "ERROR: No commits found in repository!"
+                exit 1
+            fi
+            
+            if echo "$last_commit_message" | grep -q "^\[temp\]"; then
+                base_message=$(echo "$last_commit_message" | sed 's/^\[temp\] //' | sed 's/ | .*$//')
+                echo -e "${TEAL}Enter Temp commit message:${RESET} "
+                read -r temp_message < /dev/tty
+                
+                if [ -n "$temp_message" ] && [ -n "$(echo "$temp_message" | tr -d '[:space:]')" ]; then
+                    commit_message="[temp] $base_message | $temp_message"
+                else
+                    commit_message="[temp] $base_message"
+                fi
+                
+                action_with_spinner "Staging All Changes" git add -A
+                action_with_spinner_and_output "Creating Temp Commit" git commit -m "$commit_message" --allow-empty
+            else
+                default_branch=$(get_default_branch)
+                action_with_spinner "Checking origin/$default_branch" git fetch --all --prune >/dev/null 2>&1
+                
+                origin_ref="origin/$default_branch"
+                if git rev-parse --verify "$origin_ref" >/dev/null 2>&1; then
+                    local_commit=$(git rev-parse HEAD 2>/dev/null)
+                    origin_commit=$(git rev-parse "$origin_ref" 2>/dev/null)
+                    
+                    if [ -n "$local_commit" ] && [ -n "$origin_commit" ]; then
+                        if git merge-base --is-ancestor "$origin_commit" "$local_commit" 2>/dev/null; then
+                            ahead=$(git rev-list --count "$origin_commit".."$local_commit" 2>/dev/null)
+                            if [ "$ahead" -eq 0 ]; then
+                                error "Cannot create a temp commit from \"$last_commit_message\" - it doesn't belong to this branch. Create a new temp stack with \"fit temp \\\"Your commit message\\\"\""
+                                exit 1
+                            fi
+                        fi
+                    fi
+                fi
+                
+                check_origin
+                
+                error "Last commit is not a temp commit. Create a new temp stack with \"fit temp \\\"Your commit message\\\"\""
+                exit 1
+            fi
+        fi
+        ;;
+
+    ship)
+        check_git_identity
+        
+        if ! git rev-parse --git-dir >/dev/null 2>&1; then
+            error "ERROR: Not in a git repository!"
+            exit 1
+        fi
+        
+        action_with_spinner "Staging All Changes" git add -A
+        
+        if [ -n "$(git status --porcelain)" ]; then
+            action_with_spinner_and_output "Committing Uncommitted Changes" git commit -m "[temp] Uncommitted changes" --allow-empty
+        fi
+        
+        default_branch=$(get_default_branch)
+        action_with_spinner "Fetching origin/$default_branch" git fetch origin "$default_branch" --prune >/dev/null 2>&1
+        
+        origin_ref="origin/$default_branch"
+        if git rev-parse --verify "$origin_ref" >/dev/null 2>&1; then
+            base_commit=$(git merge-base HEAD "$origin_ref" 2>/dev/null)
+        else
+            base_commit=$(git rev-list --max-count=1 HEAD~$(git rev-list --count HEAD 2>/dev/null || echo "0") 2>/dev/null)
+            if [ -z "$base_commit" ]; then
+                base_commit=""
+            fi
+        fi
+        
+        if [ -z "$base_commit" ]; then
+            temp_file=$(mktemp)
+            git log --format="%H|%s" --reverse HEAD > "$temp_file"
+        else
+            temp_file=$(mktemp)
+            git log --format="%H|%s" --reverse "$base_commit"..HEAD > "$temp_file"
+        fi
+        
+        if [ ! -s "$temp_file" ]; then
+            error "ERROR: No commits found in current branch!"
+            rm -f "$temp_file"
+            exit 1
+        fi
+        
+        has_temp_commits=false
+        while IFS='|' read -r commit_hash commit_msg; do
+            if echo "$commit_msg" | grep -q "^\[temp\]"; then
+                has_temp_commits=true
+                break
+            fi
+        done < "$temp_file"
+        
+        if [ "$has_temp_commits" = "false" ]; then
+            info "No temp commits found. Proceeding with push."
+            rm -f "$temp_file"
+            do_rebase
+            if [ $? -eq 0 ]; then
+                current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+                if [ -n "$current_branch" ]; then
+                    action_with_spinner_and_output "Force Pushing" git push --force --set-upstream origin "$current_branch"
+                else
+                    action_with_spinner_and_output "Force Pushing" git push --force
+                fi
+            else
+                error "ERROR: Conflicts detected during rebase! Push aborted. Please resolve conflicts and push manually."
+                exit 1
+            fi
+            exit 0
+        fi
+        
+        if [ -z "$base_commit" ]; then
+            empty_tree=$(git hash-object -t tree /dev/null 2>/dev/null || git mktree < /dev/null 2>/dev/null || echo "")
+            if [ -n "$empty_tree" ]; then
+                action_with_spinner_and_output "Resetting to Empty" git read-tree "$empty_tree"
+                git clean -fd >/dev/null 2>&1 || true
+            else
+                action_with_spinner_and_output "Resetting to Empty" git rm -rf . >/dev/null 2>&1 || true
+            fi
+        else
+            action_with_spinner_and_output "Resetting to Base" git reset --hard "$base_commit"
+        fi
+        
+        current_base=""
+        last_temp_commit_hash=""
+        
+        exec 3< "$temp_file"
+        while IFS='|' read -r commit_hash commit_msg <&3; do
+            if [ -z "$commit_hash" ] || [ -z "$commit_msg" ]; then
+                continue
+            fi
+            
+            if echo "$commit_msg" | grep -q "^\[temp\]"; then
+                base=$(echo "$commit_msg" | sed 's/^\[temp\] //' | sed 's/ | .*$//')
+                
+                if [ -z "$current_base" ]; then
+                    current_base="$base"
+                    last_temp_commit_hash="$commit_hash"
+                elif [ "$current_base" != "$base" ]; then
+                    if [ -n "$current_base" ] && [ -n "$last_temp_commit_hash" ]; then
+                        tree_hash=$(git rev-parse "$last_temp_commit_hash^{tree}" 2>/dev/null)
+                        if [ -n "$tree_hash" ]; then
+                            action_with_spinner_and_output "Applying Commit" git read-tree "$tree_hash" >/dev/null 2>&1
+                            git checkout-index -f -a >/dev/null 2>&1 || true
+                        fi
+                        action_with_spinner "Staging All Changes" git add -A
+                        action_with_spinner_and_output "Creating Squashed Commit" git commit -m "$current_base" --allow-empty
+                    fi
+                    current_base="$base"
+                    last_temp_commit_hash="$commit_hash"
+                else
+                    last_temp_commit_hash="$commit_hash"
+                fi
+            else
+                if [ -n "$current_base" ] && [ -n "$last_temp_commit_hash" ]; then
+                    tree_hash=$(git rev-parse "$last_temp_commit_hash^{tree}" 2>/dev/null)
+                    if [ -n "$tree_hash" ]; then
+                        action_with_spinner_and_output "Applying Commit" git read-tree "$tree_hash" >/dev/null 2>&1
+                        git checkout-index -f -a >/dev/null 2>&1 || true
+                    fi
+                    action_with_spinner "Staging All Changes" git add -A
+                    action_with_spinner_and_output "Creating Squashed Commit" git commit -m "$current_base" --allow-empty
+                    current_base=""
+                    last_temp_commit_hash=""
+                fi
+                
+                tree_hash=$(git rev-parse "$commit_hash^{tree}" 2>/dev/null)
+                if [ -n "$tree_hash" ]; then
+                    action_with_spinner_and_output "Applying Commit" git read-tree "$tree_hash" >/dev/null 2>&1
+                    git checkout-index -f -a >/dev/null 2>&1 || true
+                fi
+                action_with_spinner "Staging All Changes" git add -A
+                action_with_spinner_and_output "Recreating Commit" git commit -m "$commit_msg" --allow-empty
+            fi
+        done
+        exec 3<&-
+        
+        if [ -n "$current_base" ] && [ -n "$last_temp_commit_hash" ]; then
+            tree_hash=$(git rev-parse "$last_temp_commit_hash^{tree}" 2>/dev/null)
+            if [ -n "$tree_hash" ]; then
+                action_with_spinner_and_output "Applying Commit" git read-tree "$tree_hash" >/dev/null 2>&1
+                git checkout-index -f -a >/dev/null 2>&1 || true
+            fi
+            action_with_spinner "Staging All Changes" git add -A
+            action_with_spinner_and_output "Creating Squashed Commit" git commit -m "$current_base" --allow-empty
+        fi
+        
+        rm -f "$temp_file"
+        
+        do_rebase
+        if [ $? -eq 0 ]; then
+            current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+            if [ -n "$current_branch" ]; then
+                action_with_spinner_and_output "Force Pushing" git push --force --set-upstream origin "$current_branch"
+            else
+                action_with_spinner_and_output "Force Pushing" git push --force
+            fi
+        else
+            error "ERROR: Conflicts detected during rebase! Push aborted. Please resolve conflicts and push manually."
+            exit 1
+        fi
+        ;;
+
+    push)
+        check_git_identity
+        
+        # 1. Commit/Amend
+        do_commit "$ARG1"
+
+        # 2. Rebase
+        do_rebase
+        
+        # 3. Check if rebase was successful
+        if [ $? -eq 0 ]; then
+            current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+            if [ -n "$current_branch" ]; then
+                action_with_spinner_and_output "Force Pushing" git push --force --set-upstream origin "$current_branch"
+            else
+                action_with_spinner_and_output "Force Pushing" git push --force
+            fi
+        else
+            error "ERROR: Conflicts detected during rebase! Push aborted. Please resolve conflicts and push manually."
+            exit 1
+        fi
+        ;;
+
+    setup)
+        CONFIG_FILE="$FIT_CONFIG"
+        ZSHRC="$HOME/.zshrc"
+        
+        if [ ! -f "$CONFIG_FILE" ]; then
+            mkdir -p "$(dirname "$CONFIG_FILE")"
+            echo 'DEFAULT_BRANCH="master"' > "$CONFIG_FILE"
+            info "Created config file: $CONFIG_FILE"
+        fi
+        
+        source "$CONFIG_FILE"
+        DEFAULT_BRANCH=$(echo "$DEFAULT_BRANCH" | tr -d '\r' | xargs)
+        GIT_USER_EMAIL=$(echo "$GIT_USER_EMAIL" | tr -d '\r' | xargs)
+        GIT_USER_NAME=$(echo "$GIT_USER_NAME" | tr -d '\r' | xargs)
+        USE_GITHUB=$(echo "$USE_GITHUB" | tr -d '\r' | xargs)
+        PROJECT_MANAGER=$(echo "$PROJECT_MANAGER" | tr -d '\r' | xargs)
+        
+        if [ -z "$DEFAULT_BRANCH" ]; then
+            echo ""
+            echo -e "${INDENT}${TEAL}Setting Up Default Branch${RESET}"
+            read -p "Enter your default branch name (e.g., master, main): " DEFAULT_BRANCH
+            if [ -z "$DEFAULT_BRANCH" ]; then
+                error "Error: Default branch is required."
+                exit 1
+            fi
+            if ! grep -q "^DEFAULT_BRANCH=" "$CONFIG_FILE" 2>/dev/null; then
+                echo "DEFAULT_BRANCH=\"$DEFAULT_BRANCH\"" >> "$CONFIG_FILE"
+            else
+                sed_in_place "$CONFIG_FILE" "s|^DEFAULT_BRANCH=.*|DEFAULT_BRANCH=\"$DEFAULT_BRANCH\"|"
+            fi
+            info "Default branch saved to config."
+            action "Setting Up Default Branch"
+        else
+            info "Default branch already configured: $DEFAULT_BRANCH"
+        fi
+        
+        if [ -z "$GIT_USER_EMAIL" ] || [ -z "$GIT_USER_NAME" ]; then
+            echo ""
+            echo -e "${INDENT}${TEAL}Setting Up Git Identity${RESET}"
+            
+            if [ -z "$GIT_USER_EMAIL" ]; then
+                read -p "Enter your git email: " GIT_USER_EMAIL
+                if [ -z "$GIT_USER_EMAIL" ]; then
+                    error "Error: Email is required."
+                    exit 1
+                fi
+            if ! grep -q "^GIT_USER_EMAIL=" "$CONFIG_FILE" 2>/dev/null; then
+                echo "GIT_USER_EMAIL=\"$GIT_USER_EMAIL\"" >> "$CONFIG_FILE"
+            else
+                sed_in_place "$CONFIG_FILE" "s|^GIT_USER_EMAIL=.*|GIT_USER_EMAIL=\"$GIT_USER_EMAIL\"|"
+            fi
+            fi
+            
+            if [ -z "$GIT_USER_NAME" ]; then
+                read -p "Enter your git name: " GIT_USER_NAME
+                if [ -z "$GIT_USER_NAME" ]; then
+                    error "Error: Name is required."
+                    exit 1
+                fi
+            if ! grep -q "^GIT_USER_NAME=" "$CONFIG_FILE" 2>/dev/null; then
+                echo "GIT_USER_NAME=\"$GIT_USER_NAME\"" >> "$CONFIG_FILE"
+            else
+                sed_in_place "$CONFIG_FILE" "s|^GIT_USER_NAME=.*|GIT_USER_NAME=\"$GIT_USER_NAME\"|"
+            fi
+            fi
+            
+            info "Git identity saved to config."
+            action "Setting Up Git Identity"
+        else
+            info "Git identity already configured."
+        fi
+        
+        if [ "$USE_GITHUB" != "true" ]; then
+            echo ""
+            read -p "Do you want to connect your GitHub account? (yes/no): " connect_github
+            if [ "$connect_github" = "yes" ] || [ "$connect_github" = "y" ]; then
+                echo ""
+                echo -e "${INDENT}${TEAL}Setting Up GitHub${RESET}"
+                
+                if ! command -v gh >/dev/null 2>&1; then
+                    info "GitHub CLI not found. Installing..."
+                    if command -v brew >/dev/null 2>&1; then
+                        action_with_spinner_and_output "Installing GitHub CLI" brew install gh
+                        hash -r
+                    elif command -v apt-get >/dev/null 2>&1; then
+                        if [ "$(id -u)" -eq 0 ]; then
+                            if [ ! -f /etc/apt/sources.list.d/github-cli.list ]; then
+                                info "Adding GitHub CLI repository..."
+                                curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null
+                                chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null
+                                echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+                            fi
+                            install_output=$(mktemp)
+                            action_start "Installing GitHub CLI"
+                            if apt-get update > "$install_output" 2>&1 && apt-get install -y gh >> "$install_output" 2>&1; then
+                                action_end "Installing GitHub CLI"
+                                while IFS= read -r line || [ -n "$line" ]; do
+                                    [ -n "$line" ] && info "$line"
+                                done < "$install_output"
+                                rm -f "$install_output"
+                            else
+                                action_end "Installing GitHub CLI"
+                                error "Installation failed. Output:"
+                                while IFS= read -r line || [ -n "$line" ]; do
+                                    [ -n "$line" ] && error "$line"
+                                done < "$install_output"
+                                rm -f "$install_output"
+                                error "Please install GitHub CLI manually: https://cli.github.com/"
+                                exit 1
+                            fi
+                        else
+                            info "Sudo access is required to install GitHub CLI. You may be prompted for your password."
+                            if [ ! -f /etc/apt/sources.list.d/github-cli.list ]; then
+                                info "Adding GitHub CLI repository..."
+                                if ! curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null; then
+                                    error "Failed to add GitHub CLI repository key."
+                                    exit 1
+                                fi
+                                sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null
+                                echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+                            fi
+                            install_output=$(mktemp)
+                            action_start "Installing GitHub CLI"
+                            if sudo apt-get update > "$install_output" 2>&1 && sudo apt-get install -y gh >> "$install_output" 2>&1; then
+                                action_end "Installing GitHub CLI"
+                                while IFS= read -r line || [ -n "$line" ]; do
+                                    [ -n "$line" ] && info "$line"
+                                done < "$install_output"
+                                rm -f "$install_output"
+                            else
+                                action_end "Installing GitHub CLI"
+                                error "Installation failed. Output:"
+                                while IFS= read -r line || [ -n "$line" ]; do
+                                    [ -n "$line" ] && error "$line"
+                                done < "$install_output"
+                                rm -f "$install_output"
+                                error "Please run: sudo fit setup"
+                                error "Or install GitHub CLI manually: https://cli.github.com/"
+                                exit 1
+                            fi
+                        fi
+                        hash -r
+                        if ! command -v gh >/dev/null 2>&1; then
+                            for gh_path in /usr/bin/gh /usr/local/bin/gh /snap/bin/gh; do
+                                if [ -f "$gh_path" ] && [ -x "$gh_path" ]; then
+                                    export PATH="$(dirname "$gh_path"):$PATH"
+                                    break
+                                fi
+                            done
+                            if ! command -v gh >/dev/null 2>&1 && dpkg -l | grep -q "^ii.*gh "; then
+                                info "GitHub CLI package is installed. Trying to locate binary..."
+                                gh_location=$(dpkg -L gh 2>/dev/null | grep -E '/bin/gh$' | head -1)
+                                if [ -n "$gh_location" ] && [ -x "$gh_location" ]; then
+                                    export PATH="$(dirname "$gh_location"):$PATH"
+                                fi
+                            fi
+                        fi
+                    elif command -v yum >/dev/null 2>&1; then
+                        if [ "$(id -u)" -eq 0 ]; then
+                            action_with_spinner_and_output "Installing GitHub CLI" yum install -y gh
+                        else
+                            info "Sudo access is required to install GitHub CLI. You may be prompted for your password."
+                            if ! action_with_spinner_and_output "Installing GitHub CLI" sudo yum install -y gh; then
+                                error "Installation failed. If you were prompted for a password, please run: sudo fit setup"
+                                error "Or install GitHub CLI manually: https://cli.github.com/"
+                                exit 1
+                            fi
+                        fi
+                        hash -r
+                        if ! command -v gh >/dev/null 2>&1 && [ -f /usr/bin/gh ]; then
+                            export PATH="/usr/bin:$PATH"
+                        fi
+                    else
+                        error "Could not detect package manager. Please install GitHub CLI manually: https://cli.github.com/"
+                        exit 1
+                    fi
+                    
+                    if ! command -v gh >/dev/null 2>&1; then
+                        error "GitHub CLI was installed but cannot be found. Please restart your terminal and run 'fit setup' again."
+                        exit 1
+                    fi
+                fi
+                
+                if gh auth status >/dev/null 2>&1; then
+                    info "GitHub is already authenticated."
+                    USE_GITHUB="true"
+                else
+                    info "Logging in to GitHub..."
+                    if gh auth login; then
+                        USE_GITHUB="true"
+                        info "GitHub authentication successful."
+                    else
+                        error "GitHub authentication failed."
+                        USE_GITHUB="false"
+                    fi
+                fi
+                
+                    if ! grep -q "^USE_GITHUB=" "$CONFIG_FILE" 2>/dev/null; then
+                        echo "USE_GITHUB=\"$USE_GITHUB\"" >> "$CONFIG_FILE"
+                    else
+                        sed_in_place "$CONFIG_FILE" "s|^USE_GITHUB=.*|USE_GITHUB=\"$USE_GITHUB\"|"
+                    fi
+                
+                action "Setting Up GitHub"
+            else
+                USE_GITHUB="false"
+                    if ! grep -q "^USE_GITHUB=" "$CONFIG_FILE" 2>/dev/null; then
+                        echo "USE_GITHUB=\"false\"" >> "$CONFIG_FILE"
+                    else
+                        sed_in_place "$CONFIG_FILE" "s|^USE_GITHUB=.*|USE_GITHUB=\"false\"|"
+                    fi
+                info "GitHub integration skipped."
+            fi
+        else
+            if ! command -v gh >/dev/null 2>&1; then
+                error "GitHub CLI (gh) is not installed."
+                exit 1
+            fi
+            
+            if gh auth status >/dev/null 2>&1; then
+                info "GitHub is already connected."
+            else
+                info "GitHub was configured but authentication is missing. Re-authenticating..."
+                if gh auth login; then
+                    info "GitHub re-authentication successful."
+                else
+                    error "GitHub re-authentication failed. Run 'fit setup' again to fix."
+                fi
+            fi
+        fi
+        
+        if [ -z "$PROJECT_MANAGER" ] || [ "$PROJECT_MANAGER" != "jira" ] && [ "$PROJECT_MANAGER" != "none" ]; then
+            echo ""
+            echo -e "${INDENT}${TEAL}Setting Up Project Manager${RESET}"
+            echo "Select a project manager:"
+            echo "1) Jira"
+            echo "2) None"
+            read -p "Enter your choice (1 or 2): " pm_choice
+            
+            case "$pm_choice" in
+                1)
+                    PROJECT_MANAGER="jira"
+                    ;;
+                2|*)
+                    PROJECT_MANAGER="none"
+                    ;;
+            esac
+            
+            if ! grep -q "^PROJECT_MANAGER=" "$CONFIG_FILE" 2>/dev/null; then
+                echo "PROJECT_MANAGER=\"$PROJECT_MANAGER\"" >> "$CONFIG_FILE"
+            else
+                sed_in_place "$CONFIG_FILE" "s|^PROJECT_MANAGER=.*|PROJECT_MANAGER=\"$PROJECT_MANAGER\"|"
+            fi
+            info "Project manager saved to config."
+            action "Setting Up Project Manager"
+        else
+            info "Project manager already configured: $PROJECT_MANAGER"
+        fi
+        
+        if [ "$PROJECT_MANAGER" = "jira" ]; then
+            echo ""
+            echo -e "${INDENT}${TEAL}Setting Up Jira${RESET}"
+            
+            jira_cli_type=""
+            if command -v jira >/dev/null 2>&1; then
+                if jira issue list --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "issue list"; then
+                    jira_cli_type="new"
+                    info "New Jira CLI (ankitpokhrel/jira-cli) is installed."
+                elif jira ls --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "list.*Prints list of issues"; then
+                    jira_cli_type="old"
+                    info "Old Jira CLI (go-jira/jira) detected. It doesn't support API v3."
+                    info "Installing new Jira CLI..."
+                    
+                    if command -v go >/dev/null 2>&1; then
+                        info "Installing new Jira CLI via Go..."
+                        action_with_spinner "Installing new Jira CLI via Go" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                        hash -r
+                        
+                        if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                            export PATH="$HOME/go/bin:$PATH"
+                            if [ -f "$ZSHRC" ]; then
+                                if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                    echo "" >> "$ZSHRC"
+                                    echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                fi
+                            elif [ -f "$HOME/.bashrc" ]; then
+                                if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                    echo "" >> "$HOME/.bashrc"
+                                    echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                fi
+                            fi
+                            
+                            if command -v jira >/dev/null 2>&1 && (jira issue list --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "issue list"); then
+                                jira_cli_type="new"
+                                info "New Jira CLI installed successfully via Go."
+                            fi
+                        fi
+                    elif command -v go >/dev/null 2>&1; then
+                        action_with_spinner "Installing new Jira CLI via Go" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                        hash -r
+                        
+                        if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                            export PATH="$HOME/go/bin:$PATH"
+                            if [ -f "$ZSHRC" ]; then
+                                if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                    echo "" >> "$ZSHRC"
+                                    echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                fi
+                            elif [ -f "$HOME/.bashrc" ]; then
+                                if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                    echo "" >> "$HOME/.bashrc"
+                                    echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                fi
+                            fi
+                            
+                            if command -v jira >/dev/null 2>&1 && (jira issue list --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "issue list"); then
+                                jira_cli_type="new"
+                                info "New Jira CLI installed successfully via Go."
+                            fi
+                        fi
+                    else
+                        echo ""
+                        echo -e "${TEAL}Neither Homebrew nor Go is installed.${RESET}"
+                        echo -e "${TEAL}Which would you like to install?${RESET}"
+                        echo ""
+                        echo "1) Homebrew (recommended)"
+                        echo "2) Go"
+                        echo ""
+                        echo -e "${TEAL}Enter your choice (1 or 2):${RESET} "
+                        read -r choice < /dev/tty
+                        
+                        case "$choice" in
+                            1)
+                                if install_homebrew; then
+                                    if command -v go >/dev/null 2>&1; then
+                                        info "Installing new Jira CLI via Go..."
+                                        action_with_spinner "Installing new Jira CLI via Go" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                                        hash -r
+                                        
+                                        if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                                            export PATH="$HOME/go/bin:$PATH"
+                                            if [ -f "$ZSHRC" ]; then
+                                                if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                                    echo "" >> "$ZSHRC"
+                                                    echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                                fi
+                                            elif [ -f "$HOME/.bashrc" ]; then
+                                                if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                                    echo "" >> "$HOME/.bashrc"
+                                                    echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                                fi
+                                            fi
+                                            
+                                            if command -v jira >/dev/null 2>&1 && (jira issue list --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "issue list"); then
+                                                jira_cli_type="new"
+                                                info "New Jira CLI installed successfully via Go."
+                                            fi
+                                        fi
+                                    else
+                                        if install_go; then
+                                            info "Installing new Jira CLI via Go..."
+                                            action_with_spinner "Installing new Jira CLI via Go" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                                            hash -r
+                                            
+                                            if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                                                export PATH="$HOME/go/bin:$PATH"
+                                                if [ -f "$ZSHRC" ]; then
+                                                    if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                                        echo "" >> "$ZSHRC"
+                                                        echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                                        echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                                    fi
+                                                elif [ -f "$HOME/.bashrc" ]; then
+                                                    if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                                        echo "" >> "$HOME/.bashrc"
+                                                        echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                                        echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                                    fi
+                                                fi
+                                                
+                                                if command -v jira >/dev/null 2>&1 && (jira issue list --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "issue list"); then
+                                                    jira_cli_type="new"
+                                                    info "New Jira CLI installed successfully via Go."
+                                                fi
+                                            fi
+                                        else
+                                            error "Failed to install Go. Please install it manually and run 'fit setup' again."
+                                            exit 1
+                                        fi
+                                    fi
+                                else
+                                    error "Failed to install Homebrew. Please install it manually and run 'fit setup' again."
+                                    exit 1
+                                fi
+                                ;;
+                            2)
+                                if install_go; then
+                                    info "Installing new Jira CLI via Go..."
+                                    action_with_spinner "Installing new Jira CLI via Go" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                                    hash -r
+                                    
+                                    if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                                        export PATH="$HOME/go/bin:$PATH"
+                                        if [ -f "$ZSHRC" ]; then
+                                            if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                                echo "" >> "$ZSHRC"
+                                                echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                                echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                            fi
+                                        elif [ -f "$HOME/.bashrc" ]; then
+                                            if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                                echo "" >> "$HOME/.bashrc"
+                                                echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                                echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                            fi
+                                        fi
+                                        
+                                        if command -v jira >/dev/null 2>&1 && (jira issue list --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "issue list"); then
+                                            jira_cli_type="new"
+                                            info "New Jira CLI installed successfully via Go."
+                                        fi
+                                    fi
+                                else
+                                    error "Failed to install Go. Please install it manually and run 'fit setup' again."
+                                    exit 1
+                                fi
+                                ;;
+                            *)
+                                error "Invalid choice. Please run 'fit setup' again."
+                                exit 1
+                                ;;
+                        esac
+                    fi
+                else
+                    info "Jira CLI is installed but type is unknown."
+                fi
+            else
+                info "Jira CLI not found. Installing..."
+                
+                if command -v go >/dev/null 2>&1; then
+                    info "Installing jira-cli via Go..."
+                    action_with_spinner "Installing Jira CLI" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                    hash -r
+                    
+                    if ! command -v jira >/dev/null 2>&1; then
+                        if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                            export PATH="$HOME/go/bin:$PATH"
+                            if [ -f "$ZSHRC" ]; then
+                                if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                    echo "" >> "$ZSHRC"
+                                    echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                fi
+                            elif [ -f "$HOME/.bashrc" ]; then
+                                if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                    echo "" >> "$HOME/.bashrc"
+                                    echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                fi
+                            fi
+                        fi
+                    fi
+                elif command -v go >/dev/null 2>&1; then
+                    info "Homebrew not found. Installing jira-cli via Go..."
+                    action_with_spinner "Installing Jira CLI" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                    hash -r
+                    
+                    if ! command -v jira >/dev/null 2>&1; then
+                        if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                            export PATH="$HOME/go/bin:$PATH"
+                            if [ -f "$ZSHRC" ]; then
+                                if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                    echo "" >> "$ZSHRC"
+                                    echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                fi
+                            elif [ -f "$HOME/.bashrc" ]; then
+                                if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                    echo "" >> "$HOME/.bashrc"
+                                    echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                fi
+                            fi
+                        fi
+                    fi
+                else
+                    echo ""
+                    echo -e "${TEAL}Neither Homebrew nor Go is installed.${RESET}"
+                    echo -e "${TEAL}Which would you like to install?${RESET}"
+                    echo ""
+                    echo "1) Homebrew (recommended)"
+                    echo "2) Go"
+                    echo ""
+                    echo -e "${TEAL}Enter your choice (1 or 2):${RESET} "
+                    read -r choice < /dev/tty
+                    
+                    case "$choice" in
+                        1)
+                            if install_homebrew; then
+                                if command -v go >/dev/null 2>&1; then
+                                    info "Installing jira-cli via Go..."
+                                    action_with_spinner "Installing Jira CLI" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                                    hash -r
+                                    
+                                    if ! command -v jira >/dev/null 2>&1; then
+                                        if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                                            export PATH="$HOME/go/bin:$PATH"
+                                            if [ -f "$ZSHRC" ]; then
+                                                if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                                    echo "" >> "$ZSHRC"
+                                                    echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                                fi
+                                            elif [ -f "$HOME/.bashrc" ]; then
+                                                if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                                    echo "" >> "$HOME/.bashrc"
+                                                    echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                                fi
+                                            fi
+                                        fi
+                                    fi
+                                else
+                                    if install_go; then
+                                        info "Installing jira-cli via Go..."
+                                        action_with_spinner "Installing Jira CLI" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                                        hash -r
+                                        
+                                        if ! command -v jira >/dev/null 2>&1; then
+                                            if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                                                export PATH="$HOME/go/bin:$PATH"
+                                                if [ -f "$ZSHRC" ]; then
+                                                    if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                                        echo "" >> "$ZSHRC"
+                                                        echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                                        echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                                    fi
+                                                elif [ -f "$HOME/.bashrc" ]; then
+                                                    if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                                        echo "" >> "$HOME/.bashrc"
+                                                        echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                                        echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                                    fi
+                                                fi
+                                            fi
+                                        fi
+                                    else
+                                        error "Failed to install Go. Please install it manually and run 'fit setup' again."
+                                        exit 1
+                                    fi
+                                fi
+                            else
+                                error "Failed to install Homebrew. Please install it manually and run 'fit setup' again."
+                                exit 1
+                            fi
+                            ;;
+                        2)
+                            if install_go; then
+                                info "Installing jira-cli via Go..."
+                                action_with_spinner "Installing Jira CLI" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                                hash -r
+                                
+                                if ! command -v jira >/dev/null 2>&1; then
+                                    if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                                        export PATH="$HOME/go/bin:$PATH"
+                                        if [ -f "$ZSHRC" ]; then
+                                            if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                                echo "" >> "$ZSHRC"
+                                                echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                                echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                            fi
+                                        elif [ -f "$HOME/.bashrc" ]; then
+                                            if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                                echo "" >> "$HOME/.bashrc"
+                                                echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                                echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                            fi
+                                        fi
+                                    fi
+                                fi
+                            else
+                                error "Failed to install Go. Please install it manually and run 'fit setup' again."
+                                exit 1
+                            fi
+                            ;;
+                        *)
+                            error "Invalid choice. Please run 'fit setup' again."
+                            exit 1
+                            ;;
+                    esac
+                fi
+                
+                if ! command -v jira >/dev/null 2>&1; then
+                    error "Jira CLI was installed but cannot be found."
+                    error "Please restart your terminal and run 'fit setup' again."
+                    if [ -d "$HOME/go/bin" ]; then
+                        error "Or add Go bin to your PATH: export PATH=\"\$HOME/go/bin:\$PATH\""
+                    fi
+                    exit 1
+                fi
+            fi
+            
+            if command -v jira >/dev/null 2>&1; then
+                if jira issue list --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "issue list"; then
+                    info "New Jira CLI (ankitpokhrel/jira-cli) is installed and ready."
+                elif jira ls --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "list.*Prints list of issues"; then
+                    error "WARNING: Old Jira CLI (go-jira/jira) is installed. It doesn't support Jira API v3."
+                    error ""
+                    error "To fix this:"
+                    error "  1. Install Go: brew install go (or your system's package manager)"
+                    error "  2. Install new CLI: go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest"
+                    error "  3. Make sure \$HOME/go/bin is in your PATH (before /usr/local/bin)"
+                    error "  4. Restart your terminal or run: export PATH=\"\$HOME/go/bin:\$PATH\""
+                    error "  5. Run 'fit setup' again"
+                    error ""
+                    error "The old CLI will not work with current Jira instances."
+                fi
+            fi
+            
+            JIRA_CONFIG_DIR="$HOME/.config/.jira"
+            JIRA_CONFIG_FILE="$JIRA_CONFIG_DIR/.config.yml"
+            OLD_JIRA_CONFIG="$HOME/.jira.d/config.yml"
+            WRONG_CONFIG_FILE="$HOME/.config/jira/config.yaml"
+            
+            if [ -f "$WRONG_CONFIG_FILE" ] && [ ! -f "$JIRA_CONFIG_FILE" ]; then
+                info "Found config in old location. Migrating to correct location..."
+                mkdir -p "$JIRA_CONFIG_DIR"
+                cp "$WRONG_CONFIG_FILE" "$JIRA_CONFIG_FILE" 2>/dev/null
+                chmod 600 "$JIRA_CONFIG_FILE"
+                rm -f "$WRONG_CONFIG_FILE"
+                info "Migrated config to correct location."
+            fi
+            
+            if [ -f "$OLD_JIRA_CONFIG" ] && [ ! -f "$JIRA_CONFIG_FILE" ]; then
+                info "Found old Jira config. Migrating to new format..."
+                if [ -f "$OLD_JIRA_CONFIG" ]; then
+                    old_endpoint=$(grep "^endpoint:" "$OLD_JIRA_CONFIG" 2>/dev/null | sed 's/^endpoint:[[:space:]]*//' | tr -d '"' | tr -d "'")
+                    old_user=$(grep "^user:" "$OLD_JIRA_CONFIG" 2>/dev/null | sed 's/^user:[[:space:]]*//' | tr -d '"' | tr -d "'")
+                    old_password=$(grep "^password:" "$OLD_JIRA_CONFIG" 2>/dev/null | sed 's/^password:[[:space:]]*//' | tr -d '"' | tr -d "'")
+                    
+                    if [ -n "$old_endpoint" ] && [ -n "$old_user" ] && [ -n "$old_password" ]; then
+                        mkdir -p "$JIRA_CONFIG_DIR"
+                        cat > "$JIRA_CONFIG_FILE" << EOF
+installation:
+  type: cloud
+  baseURL: $old_endpoint
+  login: $old_user
+EOF
+                        chmod 600 "$JIRA_CONFIG_FILE"
+                        
+                        NETRC_FILE="$HOME/.netrc"
+                        jira_host=$(echo "$old_endpoint" | sed 's|^https\?://||' | sed 's|/.*$||')
+                        if [ -f "$NETRC_FILE" ]; then
+                            if grep -q "machine $jira_host" "$NETRC_FILE" 2>/dev/null; then
+                                sed_in_place "$NETRC_FILE" "/^machine $jira_host/,/^$/d"
+                            fi
+                        fi
+                        {
+                            echo ""
+                            echo "machine $jira_host"
+                            echo "login $old_user"
+                            echo "password $old_password"
+                        } >> "$NETRC_FILE"
+                        chmod 600 "$NETRC_FILE"
+                        info "Migrated old Jira config to new format."
+                    fi
+                fi
+            fi
+            
+            if [ ! -f "$JIRA_CONFIG_FILE" ]; then
+                mkdir -p "$JIRA_CONFIG_DIR"
+                echo ""
+                info "Configuring Jira connection..."
+                read -p "Enter your Jira server URL (e.g., https://yourcompany.atlassian.net): " jira_server
+                if [ -z "$jira_server" ]; then
+                    error "Error: Jira server URL is required."
+                    exit 1
+                fi
+                
+                read -p "Enter your Jira username/email: " jira_user
+                if [ -z "$jira_user" ]; then
+                    error "Error: Jira username is required."
+                    exit 1
+                fi
+                
+                echo ""
+                info "You can use either an API token or password for authentication."
+                read -p "Do you want to use an API token? (yes/no): " use_token
+                
+                if [ "$use_token" = "yes" ] || [ "$use_token" = "y" ]; then
+                    read -sp "Enter your Jira API token: " jira_token
+                    echo ""
+                    if [ -z "$jira_token" ]; then
+                        error "Error: Jira API token is required."
+                        exit 1
+                    fi
+                    jira_password="$jira_token"
+                else
+                    read -sp "Enter your Jira password: " jira_password
+                    echo ""
+                    if [ -z "$jira_password" ]; then
+                        error "Error: Jira password is required."
+                        exit 1
+                    fi
+                fi
+                
+                NETRC_FILE="$HOME/.netrc"
+                jira_host=$(echo "$jira_server" | sed 's|^https\?://||' | sed 's|/.*$||')
+                if [ -f "$NETRC_FILE" ]; then
+                    if grep -q "machine $jira_host" "$NETRC_FILE" 2>/dev/null; then
+                        sed_in_place "$NETRC_FILE" "/^machine $jira_host/,/^$/d"
+                    fi
+                fi
+                {
+                    echo ""
+                    echo "machine $jira_host"
+                    echo "login $jira_user"
+                    echo "password $jira_password"
+                } >> "$NETRC_FILE"
+                chmod 600 "$NETRC_FILE"
+                info "Jira API token saved to $NETRC_FILE"
+                
+                echo ""
+                info "Fetching available Jira projects..."
+                projects_json=$(curl -s -u "$jira_user:$jira_password" "$jira_server/rest/api/3/project" 2>&1)
+                if [ $? -eq 0 ] && [ -n "$projects_json" ] && ! echo "$projects_json" | grep -qi "error\|unauthorized\|invalid"; then
+                    if command -v jq >/dev/null 2>&1; then
+                        projects=()
+                        project_keys=()
+                        project_count=$(echo "$projects_json" | jq -r 'length' 2>/dev/null)
+                        if [ -n "$project_count" ] && [ "$project_count" != "null" ] && [ "$project_count" -gt 0 ] 2>/dev/null; then
+                            for i in $(seq 0 $((project_count-1))); do
+                                project_key=$(echo "$projects_json" | jq -r ".[$i].key" 2>/dev/null)
+                                project_name=$(echo "$projects_json" | jq -r ".[$i].name" 2>/dev/null)
+                                if [ -n "$project_key" ] && [ "$project_key" != "null" ]; then
+                                    projects+=("$project_key: $project_name")
+                                    project_keys+=("$project_key")
+                                fi
+                            done
+                        fi
+                    else
+                        projects=()
+                        project_keys=()
+                        while IFS= read -r line; do
+                            project_key=$(echo "$line" | grep -o '"key":"[^"]*"' | sed 's/"key":"\([^"]*\)"/\1/' | head -1)
+                            project_name=$(echo "$line" | grep -o '"name":"[^"]*"' | sed 's/"name":"\([^"]*\)"/\1/' | head -1)
+                            if [ -n "$project_key" ] && [ -n "$project_name" ]; then
+                                projects+=("$project_key: $project_name")
+                                project_keys+=("$project_key")
+                            fi
+                        done <<< "$projects_json"
+                    fi
+                    
+                    if [ ${#projects[@]} -gt 0 ]; then
+                        echo ""
+                        echo "Available projects:"
+                        for i in "${!projects[@]}"; do
+                            echo "$((i+1))) ${projects[$i]}"
+                        done
+                        echo ""
+                        read -p "Select a project (1-${#projects[@]}): " project_choice < /dev/tty
+                        if [ -n "$project_choice" ] && [ "$project_choice" -ge 1 ] && [ "$project_choice" -le ${#projects[@]} ] 2>/dev/null; then
+                            jira_project="${project_keys[$((project_choice-1))]}"
+                            info "Selected project: $jira_project"
+                        else
+                            error "Invalid project selection."
+                            exit 1
+                        fi
+                    else
+                        read -p "Enter your default Jira project key (e.g., SCRUM, PROJ): " jira_project < /dev/tty
+                        if [ -z "$jira_project" ]; then
+                            error "Error: Default project key is required."
+                            exit 1
+                        fi
+                    fi
+                else
+                    read -p "Enter your default Jira project key (e.g., SCRUM, PROJ): " jira_project < /dev/tty
+                    if [ -z "$jira_project" ]; then
+                        error "Error: Default project key is required."
+                        exit 1
+                    fi
+                fi
+                
+                echo ""
+                info "Fetching available boards for project $jira_project..."
+                boards_json=$(curl -s -u "$jira_user:$jira_password" "$jira_server/rest/agile/1.0/board?projectKeyOrId=$jira_project" 2>&1)
+                if [ $? -eq 0 ] && [ -n "$boards_json" ] && ! echo "$boards_json" | grep -qi "error\|unauthorized\|invalid"; then
+                    boards=()
+                    board_names=()
+                    if command -v jq >/dev/null 2>&1; then
+                        board_count=$(echo "$boards_json" | jq -r '.values | length' 2>/dev/null)
+                        if [ -n "$board_count" ] && [ "$board_count" != "null" ] && [ "$board_count" -gt 0 ] 2>/dev/null; then
+                            for i in $(seq 0 $((board_count-1))); do
+                                board_name=$(echo "$boards_json" | jq -r ".values[$i].name" 2>/dev/null)
+                                if [ -n "$board_name" ] && [ "$board_name" != "null" ]; then
+                                    boards+=("$board_name")
+                                    board_names+=("$board_name")
+                                fi
+                            done
+                        fi
+                    else
+                        while IFS= read -r line; do
+                            board_name=$(echo "$line" | grep -o '"name":"[^"]*"' | sed 's/"name":"\([^"]*\)"/\1/' | head -1)
+                            if [ -n "$board_name" ]; then
+                                boards+=("$board_name")
+                                board_names+=("$board_name")
+                            fi
+                        done <<< "$boards_json"
+                    fi
+                    
+                    if [ ${#boards[@]} -gt 0 ]; then
+                        echo ""
+                        echo "Available boards:"
+                        for i in "${!boards[@]}"; do
+                            echo "$((i+1))) ${boards[$i]}"
+                        done
+                        echo ""
+                        read -p "Select a board (1-${#boards[@]}): " board_choice < /dev/tty
+                        if [ -n "$board_choice" ] && [ "$board_choice" -ge 1 ] && [ "$board_choice" -le ${#boards[@]} ] 2>/dev/null; then
+                            jira_board="${board_names[$((board_choice-1))]}"
+                            info "Selected board: $jira_board"
+                        else
+                            error "Invalid board selection."
+                            exit 1
+                        fi
+                    else
+                        read -p "Enter your default board name (e.g., SCRUM board): " jira_board < /dev/tty
+                        if [ -z "$jira_board" ]; then
+                            error "Error: Default board name is required."
+                            exit 1
+                        fi
+                    fi
+                else
+                    read -p "Enter your default board name (e.g., SCRUM board): " jira_board < /dev/tty
+                    if [ -z "$jira_board" ]; then
+                        error "Error: Default board name is required."
+                        exit 1
+                    fi
+                fi
+                
+                info "Initializing Jira configuration..."
+                if JIRA_API_TOKEN="$jira_password" jira init --force --installation cloud --server "$jira_server" --login "$jira_user" --project "$jira_project" --board "$jira_board" >/dev/null 2>&1; then
+                    info "Jira configuration initialized successfully."
+                else
+                    error "Failed to initialize Jira configuration."
+                    error "Please run 'jira init' manually to complete the setup."
+                    exit 1
+                fi
+                
+                if command -v jira >/dev/null 2>&1; then
+                    info "Testing Jira connection..."
+                    if jira issue list --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "issue list"; then
+                        if command -v timeout >/dev/null 2>&1; then
+                            test_output=$(timeout 10 jira issue list --paginate 1 2>&1)
+                            test_exit=$?
+                        else
+                            test_output=$(jira issue list --paginate 1 2>&1)
+                            test_exit=$?
+                        fi
+                    else
+                        if command -v timeout >/dev/null 2>&1; then
+                            test_output=$(timeout 10 jira ls --limit 1 2>&1)
+                            test_exit=$?
+                        else
+                            test_output=$(jira ls --limit 1 2>&1)
+                            test_exit=$?
+                        fi
+                    fi
+                    
+                    if [ $test_exit -eq 0 ] && [ -n "$test_output" ] && ! echo "$test_output" | grep -qi "error\|invalid\|failed\|usage:"; then
+                        info "Jira connection verified successfully."
+                    else
+                        if [ $test_exit -eq 124 ]; then
+                            error "Jira connection test timed out."
+                        elif echo "$test_output" | grep -qi "API.*removed\|migrate.*API\|CHANGE-2046"; then
+                            error "ERROR: Jira CLI doesn't support the current Jira API."
+                            error ""
+                            error "To fix this:"
+                            error "  1. Make sure you have the latest jira-cli installed"
+                            error "  2. Check: https://github.com/ankitpokhrel/jira-cli"
+                            error "  3. After fixing, test with: jira issue list"
+                        elif echo "$test_output" | grep -qi "authentication\|unauthorized\|invalid.*token\|invalid.*password"; then
+                            error "ERROR: Jira authentication failed."
+                            error ""
+                            error "Possible issues:"
+                            error "  - Invalid API token or password"
+                            error "  - Token may have expired"
+                            error "  - Username/email may be incorrect"
+                            error ""
+                            error "To fix this:"
+                            error "  1. Verify your API token at: https://id.atlassian.com/manage-profile/security/api-tokens"
+                            error "  2. Make sure your username/email is correct"
+                            error "  3. Re-run 'fit setup' to reconfigure"
+                            error "  4. Or manually edit: $JIRA_CONFIG_FILE"
+                        elif echo "$test_output" | grep -qi "endpoint\|server\|connection"; then
+                            error "ERROR: Could not connect to Jira server."
+                            error ""
+                            error "Possible issues:"
+                            error "  - Incorrect server URL: $jira_server"
+                            error "  - Network connectivity issues"
+                            error "  - Server may be down"
+                            error ""
+                            error "To fix this:"
+                            error "  1. Verify the server URL is correct: $jira_server"
+                            error "  2. Check your network connection"
+                            error "  3. Re-run 'fit setup' to reconfigure"
+                        else
+                            error "ERROR: Jira connection test failed."
+                            error ""
+                            error "Error output:"
+                            echo "$test_output" | while IFS= read -r line; do
+                                [ -n "$line" ] && error "  $line"
+                            done
+                            error ""
+                            error "To troubleshoot:"
+                            error "  1. Test manually: jira issue list"
+                            error "  2. Check your config: $JIRA_CONFIG_FILE"
+                            error "  3. Verify your credentials are correct"
+                            error "  4. Try re-initializing: jira init"
+                        fi
+                        error ""
+                        error "Configuration was saved, but the connection test failed."
+                        error "You can fix the issue and test again with: jira issue list"
+                    fi
+                fi
+            else
+                info "Jira is already configured."
+            fi
+            
+            if command -v jira >/dev/null 2>&1; then
+                if [ ! -f "$JIRA_CONFIG_FILE" ]; then
+                    info "Jira CLI is installed but not configured."
+                    info "Run 'fit setup' again to configure it."
+                fi
+            fi
+            
+            action "Setting Up Jira"
+        elif [ "$PROJECT_MANAGER" = "none" ]; then
+            info "No project manager configured."
+        fi
+        
+        echo ""
+        echo -e "${INDENT}${TEAL}Setting Up Shortcuts${RESET}"
+        if [ ! -f "$ZSHRC" ]; then
+            info "Warning: ~/.zshrc not found. Skipping zsh completion and alias setup."
+        else
+            if grep -q "fit completion" "$ZSHRC"; then
+                sed_in_place "$ZSHRC" '/# fit completion/d'
+                sed_in_place "$ZSHRC" '/fpath=.*\.fit/d'
+                sed_in_place "$ZSHRC" '/autoload -Uz compinit && compinit/d'
+                sed_in_place "$ZSHRC" '/fit quick completion/d'
+                sed_in_place "$ZSHRC" '/compdef _fit fit/d'
+                sed_in_place "$ZSHRC" '/expand-f-to-fit/d'
+                sed_in_place "$ZSHRC" '/bindkey.*expand-f-to-fit/d'
+                info "Removed existing zsh completion configuration."
+            fi
+            
+            if grep -q "# fit aliases" "$ZSHRC"; then
+                sed_in_place "$ZSHRC" '/# fit aliases/,/# end fit aliases/d'
+                info "Removed existing fit aliases."
+            fi
+            
+            echo "" >> "$ZSHRC"
+            echo "# fit completion" >> "$ZSHRC"
+            echo "fpath=($FIT_DIR \$fpath)" >> "$ZSHRC"
+            echo "autoload -Uz compinit && compinit" >> "$ZSHRC"
+            echo "" >> "$ZSHRC"
+            echo "# fit completion" >> "$ZSHRC"
+            echo "compdef _fit fit" >> "$ZSHRC"
+            
+            echo "" >> "$ZSHRC"
+            echo "# fit aliases" >> "$ZSHRC"
+            
+            SCRIPT_PATH="$FIT_DIR/fit.sh"
+            if [ ! -f "$SCRIPT_PATH" ]; then
+                SCRIPT_PATH="$0"
+                if [ -L "$SCRIPT_PATH" ]; then
+                    SCRIPT_PATH=$(readlink -f "$SCRIPT_PATH" 2>/dev/null || readlink "$SCRIPT_PATH" 2>/dev/null || echo "$SCRIPT_PATH")
+                fi
+            fi
+            
+            if [ -f "$SCRIPT_PATH" ]; then
+                BLACKLIST="setup check-unsafe"
+                commands=$(sed -n '/^case "\$COMMAND" in$/,/^esac$/p' "$SCRIPT_PATH" 2>/dev/null | grep -E '^[[:space:]]+[a-z][a-z-]*\)' | sed 's/^[[:space:]]*\([a-z][a-z-]*\)).*/\1/' | sort -u)
+                
+                for cmd in $commands; do
+                    if [ -n "$cmd" ]; then
+                        is_blacklisted=false
+                        for blacklisted in $BLACKLIST; do
+                            if [ "$cmd" = "$blacklisted" ]; then
+                                is_blacklisted=true
+                                break
+                            fi
+                        done
+                        
+                        if [ "$is_blacklisted" = "false" ]; then
+                            alias_name="f-${cmd}"
+                            echo "alias ${alias_name}='fit ${cmd}'" >> "$ZSHRC"
+                        fi
+                    fi
+                done
+            fi
+            
+            echo "# end fit aliases" >> "$ZSHRC"
+            
+            info "Zsh completion and aliases for fit have been updated in ~/.zshrc"
+            info "Run 'source ~/.zshrc' or restart your terminal to enable them."
+        fi
+        
+        BASHRC="$HOME/.bashrc"
+        BASH_PROFILE="$HOME/.bash_profile"
+        BASH_COMPLETION_DIR="/etc/bash_completion.d"
+        
+        if [ -f "$BASHRC" ] || [ -f "$BASH_PROFILE" ]; then
+            bash_file=""
+            if [ -f "$BASHRC" ]; then
+                bash_file="$BASHRC"
+            else
+                bash_file="$BASH_PROFILE"
+            fi
+            
+            if grep -q "# fit bash completion" "$bash_file"; then
+                sed_in_place "$bash_file" '/# fit bash completion/,/# end fit bash completion/d'
+                info "Removed existing bash completion configuration."
+            fi
+            
+            echo "" >> "$bash_file"
+            echo "# fit bash completion" >> "$bash_file"
+            if [ -d "$BASH_COMPLETION_DIR" ] && [ -w "$BASH_COMPLETION_DIR" ]; then
+                cp "$FIT_DIR/fit.bash" "$BASH_COMPLETION_DIR/fit" 2>/dev/null
+                if [ -f "/usr/share/bash-completion/bash_completion" ] || [ -f "/etc/bash_completion" ]; then
+                    info "Bash completion installed to $BASH_COMPLETION_DIR/fit"
+                    info "Bash completion will be automatically loaded by bash-completion."
+                else
+                    echo "source \"$FIT_DIR/fit.bash\"" >> "$bash_file"
+                    info "Bash completion installed to $BASH_COMPLETION_DIR/fit and added to $bash_file"
+                fi
+            else
+                echo "source \"$FIT_DIR/fit.bash\"" >> "$bash_file"
+                info "Bash completion added to $bash_file"
+            fi
+            echo "# end fit bash completion" >> "$bash_file"
+            
+            if grep -q "# fit aliases" "$bash_file"; then
+                sed_in_place "$bash_file" '/# fit aliases/,/# end fit aliases/d'
+                info "Removed existing fit aliases from $bash_file."
+            fi
+            
+            echo "" >> "$bash_file"
+            echo "# fit aliases" >> "$bash_file"
+            
+            SCRIPT_PATH="$FIT_DIR/fit.sh"
+            if [ ! -f "$SCRIPT_PATH" ]; then
+                SCRIPT_PATH="$0"
+                if [ -L "$SCRIPT_PATH" ]; then
+                    SCRIPT_PATH=$(readlink -f "$SCRIPT_PATH" 2>/dev/null || readlink "$SCRIPT_PATH" 2>/dev/null || echo "$SCRIPT_PATH")
+                fi
+            fi
+            
+            if [ -f "$SCRIPT_PATH" ]; then
+                BLACKLIST="setup check-unsafe approved"
+                commands=$(sed -n '/^case "\$COMMAND" in$/,/^esac$/p' "$SCRIPT_PATH" 2>/dev/null | grep -E '^[[:space:]]+[a-z][a-z-]*\)' | sed 's/^[[:space:]]*\([a-z][a-z-]*\)).*/\1/' | sort -u)
+                
+                for cmd in $commands; do
+                    if [ -n "$cmd" ]; then
+                        is_blacklisted=false
+                        for blacklisted in $BLACKLIST; do
+                            if [ "$cmd" = "$blacklisted" ]; then
+                                is_blacklisted=true
+                                break
+                            fi
+                        done
+                        
+                        if [ "$is_blacklisted" = "false" ]; then
+                            alias_name="f-${cmd}"
+                            echo "alias ${alias_name}='fit ${cmd}'" >> "$bash_file"
+                        fi
+                    fi
+                done
+            fi
+            
+            echo "# end fit aliases" >> "$bash_file"
+            
+            if grep -q "# fit f- completion" "$bash_file"; then
+                sed_in_place "$bash_file" '/# fit f- completion/,/# end fit f- completion/d'
+            fi
+            
+            echo "" >> "$bash_file"
+            echo "# fit f- completion" >> "$bash_file"
+            echo "_f_complete() {" >> "$bash_file"
+            echo "    local cur=\"\${COMP_WORDS[COMP_CWORD]}\"" >> "$bash_file"
+            echo "    if [ \${#COMP_WORDS[@]} -eq 2 ] && [[ \"\$cur\" == f-* ]]; then" >> "$bash_file"
+            echo "        local fit_dir=\"\"" >> "$bash_file"
+            echo "        if command -v brew >/dev/null 2>&1; then" >> "$bash_file"
+            echo "            local brew_prefix=\$(brew --prefix 2>/dev/null)" >> "$bash_file"
+            echo "            if [ -n \"\$brew_prefix\" ] && [ -f \"\$brew_prefix/opt/fit/fit.sh\" ]; then" >> "$bash_file"
+            echo "                fit_dir=\"\$brew_prefix/opt/fit\"" >> "$bash_file"
+            echo "            fi" >> "$bash_file"
+            echo "        fi" >> "$bash_file"
+            echo "        if [ -z \"\$fit_dir\" ] && [ -f \"\$HOME/.fit/fit.sh\" ]; then" >> "$bash_file"
+            echo "            fit_dir=\"\$HOME/.fit\"" >> "$bash_file"
+            echo "        fi" >> "$bash_file"
+            echo "        if [ -n \"\$fit_dir\" ] && [ -f \"\$fit_dir/fit.sh\" ]; then" >> "$bash_file"
+            echo "            local blacklist=\"setup check-unsafe approved\"" >> "$bash_file"
+            echo "            local commands=\$(sed -n '/^case \"\\\$COMMAND\" in\$/,/^esac\$/p' \"\$fit_dir/fit.sh\" 2>/dev/null | grep -E '^[[:space:]]+[a-z][a-z-]*\)' | sed 's/^[[:space:]]*\\([a-z][a-z-]*\\)).*/\\1/' | sort -u)" >> "$bash_file"
+            echo "            local aliases=\"\"" >> "$bash_file"
+            echo "            for cmd in \$commands; do" >> "$bash_file"
+            echo "                is_blacklisted=false" >> "$bash_file"
+            echo "                for blacklisted in \$blacklist; do" >> "$bash_file"
+            echo "                    if [ \"\$cmd\" = \"\$blacklisted\" ]; then" >> "$bash_file"
+            echo "                        is_blacklisted=true" >> "$bash_file"
+            echo "                        break" >> "$bash_file"
+            echo "                    fi" >> "$bash_file"
+            echo "                done" >> "$bash_file"
+            echo "                if [ \"\$is_blacklisted\" = \"false\" ]; then" >> "$bash_file"
+            echo "                    aliases=\"\$aliases f-\${cmd}\"" >> "$bash_file"
+            echo "                fi" >> "$bash_file"
+            echo "            done" >> "$bash_file"
+            echo "            COMPREPLY=(\$(compgen -W \"\$aliases\" -- \"\$cur\"))" >> "$bash_file"
+            echo "        fi" >> "$bash_file"
+            echo "    else" >> "$bash_file"
+            echo "        local alias_cmd=\"\${COMP_WORDS[1]}\"" >> "$bash_file"
+            echo "        local fit_cmd=\"\${alias_cmd#f-}\"" >> "$bash_file"
+            echo "        COMP_WORDS[1]=\"\$fit_cmd\"" >> "$bash_file"
+            echo "        _fit" >> "$bash_file"
+            echo "    fi" >> "$bash_file"
+            echo "}" >> "$bash_file"
+            echo "complete -F _f_complete f-" >> "$bash_file"
+            echo "# end fit f- completion" >> "$bash_file"
+            
+            info "Bash completion and aliases for fit have been configured."
+            info "Run 'source $bash_file' or restart your terminal to enable them."
+        else
+            if [ -d "$BASH_COMPLETION_DIR" ] && [ -w "$BASH_COMPLETION_DIR" ]; then
+                cp "$FIT_DIR/fit.bash" "$BASH_COMPLETION_DIR/fit" 2>/dev/null
+                info "Bash completion installed to $BASH_COMPLETION_DIR/fit"
+            else
+                info "Warning: ~/.bashrc or ~/.bash_profile not found. Bash completion not configured."
+            fi
+        fi
+        
+        action "Setting Up Shortcuts"
+        action "Setup Complete"
+        ;;
+
+    *)
+        info "Usage: fit {rebase|rebase-continue|rebase-abort|commit|uncommit|push|temp|ship|log|branch|new-branch|setup|help} [arg] [-unsafe]"
+        info "Run 'fit help' for detailed information about all commands."
+        ;;
+esac
