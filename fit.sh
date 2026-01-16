@@ -82,7 +82,13 @@ action_with_spinner_and_output() {
     action_end "$message"
     
     while IFS= read -r line || [ -n "$line" ]; do
-        [ -n "$line" ] && info "$line"
+        if [ -n "$line" ]; then
+            if [ $exit_code -ne 0 ]; then
+                error "$line"
+            else
+                info "$line"
+            fi
+        fi
     done < "$temp_file"
     rm -f "$temp_file"
     return $exit_code
@@ -210,10 +216,28 @@ check_origin() {
 }
 
 # Helper function to run rebase logic
+do_commit() {
+    local commit_message="$1"
+    
+    action_with_spinner "Staging All Changes" git add -A
+    
+    if [ -z "$commit_message" ]; then
+        check_origin
+        action_with_spinner_and_output "Amending Commit" git commit --amend --no-edit --allow-empty
+    else
+        action_with_spinner_and_output "Creating New Commit" git commit -m "$commit_message" --allow-empty
+    fi
+}
+
 do_rebase() {
     local target=${1:-$DEFAULT_BRANCH}
     action_with_spinner "Syncing with origin/$target" git fetch --all --prune
+    local rebase_exit_code
     action_with_spinner_and_output "Rebasing with origin/$target" git rebase "origin/$target"
+    rebase_exit_code=$?
+    if [ $rebase_exit_code -ne 0 ]; then
+        return $rebase_exit_code
+    fi
 }
 
 # Helper function to display git log
@@ -255,12 +279,7 @@ case "$COMMAND" in
 
     commit)
         check_git_identity
-        if [ -z "$ARG1" ]; then
-            check_origin
-            action_with_spinner_and_output "Amending Commit" git commit --amend --no-edit --allow-empty
-        else
-            action_with_spinner_and_output "Creating New Commit" git commit -m "$ARG1" --allow-empty
-        fi
+        do_commit "$ARG1"
         ;;
 
     uncommit)
@@ -273,19 +292,19 @@ case "$COMMAND" in
         check_git_identity
         
         # 1. Commit/Amend
-        if [ -z "$ARG1" ]; then
-            check_origin
-            action_with_spinner_and_output "Amending Commit" git commit --amend --no-edit --allow-empty
-        else
-            action_with_spinner_and_output "Creating New Commit" git commit -m "$ARG1" --allow-empty
-        fi
+        do_commit "$ARG1"
 
         # 2. Rebase
         do_rebase
         
         # 3. Check if rebase was successful
         if [ $? -eq 0 ]; then
-            action_with_spinner_and_output "Force Pushing" git push --force
+            current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+            if [ -n "$current_branch" ]; then
+                action_with_spinner_and_output "Force Pushing" git push --force --set-upstream origin "$current_branch"
+            else
+                action_with_spinner_and_output "Force Pushing" git push --force
+            fi
         else
             error "ERROR: Conflicts detected during rebase! Push aborted. Please resolve conflicts and push manually."
             exit 1
@@ -297,8 +316,27 @@ case "$COMMAND" in
         ZSHRC="$HOME/.zshrc"
         
         source "$CONFIG_FILE"
+        DEFAULT_BRANCH=$(echo "$DEFAULT_BRANCH" | tr -d '\r' | xargs)
         GIT_USER_EMAIL=$(echo "$GIT_USER_EMAIL" | tr -d '\r' | xargs)
         GIT_USER_NAME=$(echo "$GIT_USER_NAME" | tr -d '\r' | xargs)
+        
+        if [ -z "$DEFAULT_BRANCH" ]; then
+            action_start "Setting Up Default Branch"
+            read -p "Enter your default branch name (e.g., master, main): " DEFAULT_BRANCH
+            if [ -z "$DEFAULT_BRANCH" ]; then
+                error "Error: Default branch is required."
+                exit 1
+            fi
+            if ! grep -q "^DEFAULT_BRANCH=" "$CONFIG_FILE" 2>/dev/null; then
+                echo "DEFAULT_BRANCH=\"$DEFAULT_BRANCH\"" >> "$CONFIG_FILE"
+            else
+                sed -i "s|^DEFAULT_BRANCH=.*|DEFAULT_BRANCH=\"$DEFAULT_BRANCH\"|" "$CONFIG_FILE"
+            fi
+            info "Default branch saved to config."
+            action_end "Setting Up Default Branch"
+        else
+            info "Default branch already configured: $DEFAULT_BRANCH"
+        fi
         
         if [ -z "$GIT_USER_EMAIL" ] || [ -z "$GIT_USER_NAME" ]; then
             action_start "Setting Up Git Identity"
@@ -354,17 +392,8 @@ case "$COMMAND" in
             echo "fpath=($FIT_DIR \$fpath)" >> "$ZSHRC"
             echo "autoload -Uz compinit && compinit" >> "$ZSHRC"
             echo "" >> "$ZSHRC"
-            echo "# fit quick completion - type 'f' + Tab to expand to 'fit '" >> "$ZSHRC"
+            echo "# fit completion" >> "$ZSHRC"
             echo "compdef _fit fit" >> "$ZSHRC"
-            echo "expand-f-to-fit() {" >> "$ZSHRC"
-            echo "  if [[ \"\$BUFFER\" == \"f\" ]] || [[ \"\$BUFFER\" == \"f \" ]]; then" >> "$ZSHRC"
-            echo "    BUFFER=\"fit \"" >> "$ZSHRC"
-            echo "    CURSOR=4" >> "$ZSHRC"
-            echo "  else" >> "$ZSHRC"
-            echo "    zle expand-or-complete" >> "$ZSHRC"
-            echo "  fi" >> "$ZSHRC"
-            echo "}" >> "$ZSHRC"
-            echo "[[ -t 0 ]] && { zle -N expand-f-to-fit 2>/dev/null && bindkey '^I' expand-f-to-fit 2>/dev/null; } || true" >> "$ZSHRC"
             
             info "Zsh completion for fit has been updated in ~/.zshrc"
             info "Run 'source ~/.zshrc' or restart your terminal to enable it."
