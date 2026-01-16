@@ -147,25 +147,34 @@ GIT_USER_NAME=$(echo "$GIT_USER_NAME" | tr -d '\r' | xargs)
 
 COMMAND=$1
 UNSAFE_FLAG=false
-
-for arg in "$@"; do
-    if [ "$arg" = "-unsafe" ]; then
-        UNSAFE_FLAG=true
-        break
-    fi
-done
-
+TASK_ID=""
 ARG1=""
 ARG2=""
+
+# Parse arguments, handling -id and -unsafe flags
 shift
-for arg in "$@"; do
-    if [ "$arg" != "-unsafe" ]; then
-        if [ -z "$ARG1" ]; then
-            ARG1="$arg"
-        elif [ -z "$ARG2" ]; then
-            ARG2="$arg"
-        fi
-    fi
+i=1
+while [ $i -le $# ]; do
+    arg="${!i}"
+    case "$arg" in
+        -unsafe)
+            UNSAFE_FLAG=true
+            ;;
+        -id)
+            if [ $i -lt $# ]; then
+                i=$((i + 1))
+                TASK_ID="${!i}"
+            fi
+            ;;
+        *)
+            if [ -z "$ARG1" ]; then
+                ARG1="$arg"
+            elif [ -z "$ARG2" ]; then
+                ARG2="$arg"
+            fi
+            ;;
+    esac
+    i=$((i + 1))
 done
 
 # Helper function to check and set git identity
@@ -234,6 +243,29 @@ save_branch_cache() {
     git branch -r --format='%(refname:short)' 2>/dev/null | sed 's|origin/||' | sort -u > "$cache_file" 2>/dev/null || true
 }
 
+# Helper function to format commit message to branch name (lowercase, hyphen-separated)
+format_commit_for_branch() {
+    echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g'
+}
+
+# Helper function to get past tense of identificator
+get_past_tense() {
+    case "$1" in
+        add) echo "Added" ;;
+        change) echo "Changed" ;;
+        update) echo "Updated" ;;
+        fix) echo "Fixed" ;;
+        refactor) echo "Refactored" ;;
+        remove) echo "Removed" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+# Helper function to capitalize first letter
+capitalize() {
+    echo "$1" | sed 's/^./\U&/'
+}
+
 do_rebase() {
     local target=${1:-$DEFAULT_BRANCH}
     action_with_spinner "Syncing with origin/$target" git fetch --all --prune
@@ -276,6 +308,45 @@ case "$COMMAND" in
         action_with_spinner "Fetching All Remotes" git fetch --all --prune
         save_branch_cache
         action_with_spinner_and_output "Checking Out Branch" git checkout "$ARG1"
+        ;;
+
+    new-branch)
+        if [ -z "$ARG1" ] || [ -z "$ARG2" ]; then
+            error "Usage: fit new-branch <identificator> \"commit message\" [-id task_id]"
+            error "Identificator must be one of: add, change, update, fix, refactor, remove"
+            exit 1
+        fi
+        
+        # Validate identificator
+        case "$ARG1" in
+            add|change|update|fix|refactor|remove)
+                ;;
+            *)
+                error "Invalid identificator: $ARG1"
+                error "Must be one of: add, change, update, fix, refactor, remove"
+                exit 1
+                ;;
+        esac
+        
+        check_git_identity
+        
+        # Format branch name
+        formatted_commit=$(format_commit_for_branch "$ARG2")
+        if [ -n "$TASK_ID" ]; then
+            branch_name="${TASK_ID}_${ARG1}-${formatted_commit}"
+        else
+            branch_name="${ARG1}-${formatted_commit}"
+        fi
+        
+        # Format commit message
+        past_tense=$(get_past_tense "$ARG1")
+        commit_message="${past_tense} $ARG2"
+        
+        # Create and checkout new branch
+        action_with_spinner_and_output "Creating New Branch" git checkout -b "$branch_name"
+        
+        # Create empty commit
+        action_with_spinner_and_output "Creating Empty Commit" git commit --allow-empty -m "$commit_message"
         ;;
 
     log)
@@ -419,6 +490,6 @@ case "$COMMAND" in
         ;;
 
     *)
-        info "Usage: fit {rebase|commit|uncommit|push|log|branch|check-unsafe|setup} [arg] [-unsafe]"
+        info "Usage: fit {rebase|commit|uncommit|push|log|branch|new-branch|check-unsafe|setup} [arg] [-unsafe]"
         ;;
 esac
