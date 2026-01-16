@@ -229,9 +229,15 @@ do_commit() {
     fi
 }
 
+save_branch_cache() {
+    local cache_file="$FIT_DIR/.branch_cache"
+    git branch -r --format='%(refname:short)' 2>/dev/null | sed 's|origin/||' | sort -u > "$cache_file" 2>/dev/null || true
+}
+
 do_rebase() {
     local target=${1:-$DEFAULT_BRANCH}
     action_with_spinner "Syncing with origin/$target" git fetch --all --prune
+    save_branch_cache
     local rebase_exit_code
     action_with_spinner_and_output "Rebasing with origin/$target" git rebase "origin/$target"
     rebase_exit_code=$?
@@ -260,6 +266,16 @@ show_log() {
 case "$COMMAND" in
     rebase)
         do_rebase "$ARG1"
+        ;;
+
+    branch)
+        if [ -z "$ARG1" ]; then
+            error "Usage: fit branch <branch-name>"
+            exit 1
+        fi
+        action_with_spinner "Fetching All Remotes" git fetch --all --prune
+        save_branch_cache
+        action_with_spinner_and_output "Checking Out Branch" git checkout "$ARG1"
         ;;
 
     log)
@@ -403,6 +419,6 @@ case "$COMMAND" in
         ;;
 
     *)
-        info "Usage: fit {rebase|commit|uncommit|push|log|check-unsafe|setup} [arg] [-unsafe]"
+        info "Usage: fit {rebase|commit|uncommit|push|log|branch|check-unsafe|setup} [arg] [-unsafe]"
         ;;
 esac

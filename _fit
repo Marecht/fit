@@ -8,6 +8,7 @@ _fit() {
         'uncommit:remove last commit but keep changes'
         'push:commit, rebase, and force push'
         'log:display git log in custom format'
+        'branch:fetch and checkout a branch'
         'setup:configure git identity and zsh completion'
     )
 
@@ -25,6 +26,30 @@ _fit() {
                 rebase)
                     local -a branches
                     if command -v git >/dev/null 2>&1; then
+                        branches=($(git branch -r --format='%(refname:short)' 2>/dev/null | sed 's|origin/||' | sort -u))
+                        if [ ${#branches[@]} -gt 0 ]; then
+                            _describe 'branch' branches
+                        fi
+                    fi
+                    ;;
+                branch)
+                    local -a branches
+                    local cache_file=""
+                    if command -v brew >/dev/null 2>&1; then
+                        local brew_prefix=$(brew --prefix 2>/dev/null)
+                        if [ -n "$brew_prefix" ] && [ -f "$brew_prefix/opt/fit/.branch_cache" ]; then
+                            cache_file="$brew_prefix/opt/fit/.branch_cache"
+                        fi
+                    fi
+                    if [ -z "$cache_file" ] && [ -f "$HOME/.fit/.branch_cache" ]; then
+                        cache_file="$HOME/.fit/.branch_cache"
+                    fi
+                    if [ -n "$cache_file" ] && [ -f "$cache_file" ]; then
+                        branches=($(cat "$cache_file" 2>/dev/null))
+                        if [ ${#branches[@]} -gt 0 ]; then
+                            _describe 'branch' branches
+                        fi
+                    elif command -v git >/dev/null 2>&1; then
                         branches=($(git branch -r --format='%(refname:short)' 2>/dev/null | sed 's|origin/||' | sort -u))
                         if [ ${#branches[@]} -gt 0 ]; then
                             _describe 'branch' branches
