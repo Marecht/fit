@@ -9,6 +9,7 @@ _fit() {
         'push:commit, rebase, and force push'
         'log:display git log in custom format'
         'branch:fetch and checkout a branch'
+        'new-branch:create a new branch with formatted name'
         'setup:configure git identity and zsh completion'
     )
 
@@ -57,6 +58,26 @@ _fit() {
                     fi
                     ;;
                 log)
+                    ;;
+                new-branch)
+                    local -a identificators
+                    identificators=(
+                        'add:add new feature'
+                        'change:modify existing feature'
+                        'update:update existing feature'
+                        'fix:fix bug or issue'
+                        'refactor:refactor code'
+                        'remove:remove feature or code'
+                    )
+                    if [[ ${#words[@]} -eq 2 ]]; then
+                        _describe 'identificator' identificators
+                    elif [[ ${#words[@]} -eq 3 ]]; then
+                        _message 'commit message'
+                    elif [[ ${#words[@]} -eq 4 ]] && [[ $words[(I)-id] -eq 0 ]]; then
+                        _describe 'option' '-id:task identifier'
+                    elif [[ $words[(I)-id] -gt 0 ]] && [[ ${#words[@]} -eq $words[(I)-id] ]]; then
+                        _message 'task_id'
+                    fi
                     ;;
                 commit|push)
                     _message
