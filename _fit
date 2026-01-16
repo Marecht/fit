@@ -1,0 +1,57 @@
+#compdef fit
+
+_fit() {
+    local -a commands
+    commands=(
+        'rebase:sync and rebase onto a branch'
+        'commit:create or amend a commit'
+        'uncommit:remove last commit but keep changes'
+        'push:commit, rebase, and force push'
+        'log:display git log in custom format'
+        'check-unsafe:check if local branch has new commits'
+        'setup:configure git identity and zsh completion'
+    )
+
+    local state
+    _arguments -C \
+        "1:command:->command" \
+        "*::arg:->args"
+
+    case $state in
+        command)
+            _describe 'fit command' commands
+            ;;
+        args)
+            case $words[1] in
+                rebase)
+                    local -a branches
+                    if command -v git >/dev/null 2>&1; then
+                        branches=($(git branch -r --format='%(refname:short)' 2>/dev/null | sed 's|origin/||' | sort -u))
+                        if [ ${#branches[@]} -gt 0 ]; then
+                            _describe 'branch' branches
+                        fi
+                    fi
+                    ;;
+                log)
+                    ;;
+                check-unsafe)
+                    if [[ $words[(I)origin] -eq 0 ]]; then
+                        _describe 'check target' 'origin:check against origin'
+                    fi
+                    ;;
+                commit|push)
+                    if [[ $words[(I)-unsafe] -eq 0 ]]; then
+                        _describe 'option' '-unsafe:bypass safety checks'
+                    else
+                        _message
+                    fi
+                    ;;
+                uncommit)
+                    if [[ $words[(I)-unsafe] -eq 0 ]]; then
+                        _describe 'option' '-unsafe:bypass safety checks'
+                    fi
+                    ;;
+            esac
+            ;;
+    esac
+}
