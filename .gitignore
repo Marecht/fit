@@ -2,3 +2,7 @@
 *.swo
 *~
 .DS_Store
+
+HOMEBREW_SETUP.md
+AGENT_DOCUMENTATION.md
+QUICK_START.md
