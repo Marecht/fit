@@ -8,7 +8,6 @@ _fit() {
         'uncommit:remove last commit but keep changes'
         'push:commit, rebase, and force push'
         'log:display git log in custom format'
-        'check-unsafe:check if local branch has new commits'
         'setup:configure git identity and zsh completion'
     )
 
@@ -34,22 +33,10 @@ _fit() {
                     ;;
                 log)
                     ;;
-                check-unsafe)
-                    if [[ $words[(I)origin] -eq 0 ]]; then
-                        _describe 'check target' 'origin:check against origin'
-                    fi
-                    ;;
                 commit|push)
-                    if [[ $words[(I)-unsafe] -eq 0 ]]; then
-                        _describe 'option' '-unsafe:bypass safety checks'
-                    else
-                        _message
-                    fi
+                    _message
                     ;;
                 uncommit)
-                    if [[ $words[(I)-unsafe] -eq 0 ]]; then
-                        _describe 'option' '-unsafe:bypass safety checks'
-                    fi
                     ;;
             esac
             ;;
