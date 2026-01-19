@@ -10,7 +10,12 @@ _fit() {
         'log:display git log in custom format'
         'branch:fetch and checkout a branch'
         'new-branch:create a new branch with formatted name'
+        'stash:stash changes with optional message'
+        'stash-pop:apply and remove stash from list'
+        'stash-apply:apply stash but keep in list'
+        'stash-clear:delete all stashes'
         'setup:configure git identity and zsh completion'
+        'help:display detailed help information'
     )
 
     local state
@@ -79,10 +84,10 @@ _fit() {
                         _message 'task_id'
                     fi
                     ;;
-                commit|push)
+                commit|push|stash)
                     _message
                     ;;
-                uncommit)
+                uncommit|stash-pop|stash-apply|stash-clear)
                     ;;
             esac
             ;;

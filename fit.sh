@@ -295,7 +295,238 @@ show_log() {
     done | less -R
 }
 
+show_stash_list_and_select() {
+    local stash_count=$(git stash list 2>/dev/null | wc -l | tr -d ' ')
+    if [ -z "$stash_count" ] || [ "$stash_count" -eq 0 ]; then
+        info "No stashes found." >&2
+        return 1
+    fi
+    
+    echo "" >&2
+    echo -e "${TEAL}Stash List:${RESET}" >&2
+    echo "" >&2
+    
+    local index=0
+    while [ $index -lt "$stash_count" ]; do
+        local stash_ref="stash@{$index}"
+        local stash_info=$(git log --format="%ad|%s" --date=local -1 "$stash_ref" 2>/dev/null)
+        
+        if [ -z "$stash_info" ]; then
+            index=$((index + 1))
+            continue
+        fi
+        
+        local date=$(echo "$stash_info" | cut -d'|' -f1)
+        local message=$(echo "$stash_info" | cut -d'|' -f2-)
+        local branch=""
+        local stash_message=""
+        
+        if echo "$message" | grep -q "^WIP on"; then
+            branch=$(echo "$message" | sed -n 's/^WIP on \([^:]*\):.*/\1/p')
+            stash_message=$(echo "$message" | sed -n 's/^WIP on [^:]*: [^ ]* \(.*\)/\1/p')
+        elif echo "$message" | grep -q "^On "; then
+            branch=$(echo "$message" | sed -n 's/^On \([^:]*\):.*/\1/p')
+            stash_message=$(echo "$message" | sed -n 's/^On [^:]*: \(.*\)/\1/p')
+        else
+            branch=$(git log --format="%D" -1 "$stash_ref" 2>/dev/null | grep -oE "HEAD -> [^,)]*" | sed 's/HEAD -> //' | head -1)
+            if [ -z "$branch" ]; then
+                branch="unknown"
+            fi
+            stash_message="$message"
+        fi
+        
+        if [ -z "$stash_message" ]; then
+            stash_message="(no message)"
+        fi
+        
+        echo -e "${INDENT}${CYAN}[$index] stash@{$index}${RESET}" >&2
+        echo -e "${INDENT}${INDENT}${YELLOW}Date:${RESET} ${GRAY}$date${RESET}" >&2
+        echo -e "${INDENT}${INDENT}${YELLOW}Branch:${RESET} ${GRAY}$branch${RESET}" >&2
+        echo -e "${INDENT}${INDENT}${YELLOW}Message:${RESET} ${GRAY}$stash_message${RESET}" >&2
+        echo "" >&2
+        
+        index=$((index + 1))
+    done
+    
+    echo -e "${TEAL}Select a stash (0-$((stash_count - 1))):${RESET} " >&2
+    read -r selected_index < /dev/tty
+    
+    if [ -z "$selected_index" ]; then
+        info "No selection made. Exiting." >&2
+        return 1
+    fi
+    
+    if ! [[ "$selected_index" =~ ^[0-9]+$ ]] || [ "$selected_index" -lt 0 ] || [ "$selected_index" -ge "$stash_count" ]; then
+        error "Invalid selection. Please enter a number between 0 and $((stash_count - 1))." >&2
+        return 1
+    fi
+    
+    echo "$selected_index"
+    return 0
+}
+
+show_help() {
+    echo -e "${WHITE}fit - Git workflow automation tool${RESET}"
+    echo ""
+    echo -e "${TEAL}COMMANDS:${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit rebase [branch]${RESET}"
+    echo -e "${INDENT}${GRAY}Syncs and rebases the current branch onto the specified branch (defaults to DEFAULT_BRANCH).${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- branch (optional): Target branch to rebase onto. Defaults to DEFAULT_BRANCH from config.${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git fetch --all --prune${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git rebase origin/<branch>${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit branch <branch-name>${RESET}"
+    echo -e "${INDENT}${GRAY}Fetches all remotes and checks out the specified branch.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- branch-name (required): Name of the branch to checkout.${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git fetch --all --prune${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git checkout <branch-name>${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit new-branch <identificator> \"commit message\" [-id task_id]${RESET}"
+    echo -e "${INDENT}${GRAY}Creates a new branch with a formatted name and an empty commit.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- identificator (required): One of: add, change, update, fix, refactor, remove${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- commit message (required): The commit message for the initial commit${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- -id task_id (optional): Task identifier to prefix the branch name${RESET}"
+    echo -e "${INDENT}${GRAY}Branch name format:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- With task_id: {task_id}_{identificator}-{formatted-commit-message}${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Without task_id: {identificator}-{formatted-commit-message}${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git checkout -b <branch-name>${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git commit --allow-empty -m \"<past-tense-identificator> <commit-message>\"${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit log [git-log-args]${RESET}"
+    echo -e "${INDENT}${GRAY}Displays git log in a custom formatted, colorized view with pager support.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git-log-args (optional): Any arguments accepted by git log (e.g., -n 10, --oneline, etc.)${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git log --format=\"%ai|%an|%ae|%h|%s\" [args]${RESET}"
+    echo -e "${INDENT}${GRAY}Output format:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}[date] author <email> commit_id${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}   - Commit message${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit stash [message]${RESET}"
+    echo -e "${INDENT}${GRAY}Stashes the current working directory changes.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- message (optional): Stash message. If omitted, stashes without a message.${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git stash push -m \"<message>\" (if message provided)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git stash push (if no message)${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit stash-pop${RESET}"
+    echo -e "${INDENT}${GRAY}Displays a formatted list of all stashes and prompts you to select one.${RESET}"
+    echo -e "${INDENT}${GRAY}Applies the selected stash and removes it from the stash list.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- None (interactive selection)${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git log --format=\"%ad|%s\" --date=local -1 stash@{index}${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git stash pop stash@{selected_index}${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit stash-apply${RESET}"
+    echo -e "${INDENT}${GRAY}Displays a formatted list of all stashes and prompts you to select one.${RESET}"
+    echo -e "${INDENT}${GRAY}Applies the selected stash but keeps it in the stash list.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- None (interactive selection)${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git log --format=\"%ad|%s\" --date=local -1 stash@{index}${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git stash apply stash@{selected_index}${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit stash-clear${RESET}"
+    echo -e "${INDENT}${GRAY}Deletes all stashes after confirmation.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- None (interactive confirmation)${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git stash clear${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit commit [message] [-unsafe]${RESET}"
+    echo -e "${INDENT}${GRAY}Stages all changes and creates a new commit or amends the last commit.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- message (optional): Commit message. If omitted, amends the last commit.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- -unsafe (optional): Bypasses the safety check for new commits when amending.${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git add -A${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git commit -m \"<message>\" --allow-empty (if message provided)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git commit --amend --no-edit --allow-empty (if no message)${RESET}"
+    echo -e "${INDENT}${GRAY}Safety check:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Verifies local branch has new commits compared to origin/DEFAULT_BRANCH (when amending, unless -unsafe flag is used)${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit uncommit [-unsafe]${RESET}"
+    echo -e "${INDENT}${GRAY}Removes the last commit from history but keeps all changes in the staging area (soft reset).${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- -unsafe (optional): Bypasses the safety check for new commits.${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git reset --soft HEAD~1${RESET}"
+    echo -e "${INDENT}${GRAY}Safety check:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Verifies local branch has new commits compared to origin/DEFAULT_BRANCH (unless -unsafe flag is used)${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit push [message] [-unsafe]${RESET}"
+    echo -e "${INDENT}${GRAY}Commits (or amends), rebases, and force pushes the current branch.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- message (optional): Commit message. If omitted, amends the last commit.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- -unsafe (optional): Bypasses the safety check for new commits when amending.${RESET}"
+    echo -e "${INDENT}${GRAY}Commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- fit commit [message] [-unsafe]${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- fit rebase${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git push --force --set-upstream origin <branch>${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit setup${RESET}"
+    echo -e "${INDENT}${GRAY}Configures git identity, default branch, zsh completion, and creates command aliases.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- None (interactive prompts)${RESET}"
+    echo -e "${INDENT}${GRAY}Configuration saved to:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- ~/.fit/config (or \$BREW_PREFIX/opt/fit/config for Homebrew)${RESET}"
+    echo -e "${INDENT}${GRAY}Actions performed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Prompts for DEFAULT_BRANCH if not configured${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Prompts for GIT_USER_EMAIL if not configured${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Prompts for GIT_USER_NAME if not configured${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Sets up zsh completion in ~/.zshrc${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Creates aliases (f-rebase, f-commit, f-push, etc.) in ~/.zshrc${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit help${RESET}"
+    echo -e "${INDENT}${GRAY}Displays this help message with detailed information about all commands.${RESET}"
+    echo ""
+    
+    echo -e "${TEAL}GLOBAL FLAGS:${RESET}"
+    echo ""
+    echo -e "${CYAN}-unsafe${RESET}"
+    echo -e "${INDENT}${GRAY}Bypasses the safety check that prevents operations when there are no new commits${RESET}"
+    echo -e "${INDENT}${GRAY}compared to origin/DEFAULT_BRANCH. Can be used with: commit, uncommit, push.${RESET}"
+    echo ""
+    
+    echo -e "${TEAL}SAFETY CHECKS:${RESET}"
+    echo ""
+    echo -e "${INDENT}${GRAY}The check_origin() function verifies that the local branch has new commits${RESET}"
+    echo -e "${INDENT}${GRAY}compared to origin/DEFAULT_BRANCH. It uses:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git rev-parse HEAD${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git rev-parse origin/<DEFAULT_BRANCH>${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git merge-base --is-ancestor${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git rev-list --count${RESET}"
+    echo ""
+}
+
 case "$COMMAND" in
+    help)
+        show_help
+        ;;
+    
     rebase)
         do_rebase "$ARG1"
         ;;
@@ -353,15 +584,58 @@ case "$COMMAND" in
         show_log "$@"
         ;;
 
-    check-unsafe)
-        if [ "$ARG1" = "origin" ]; then
-            check_origin
-            if [ $? -eq 0 ]; then
-                info "Check passed: Local branch has new commits compared to origin/$DEFAULT_BRANCH"
-            fi
+    stash)
+        if [ -n "$ARG1" ]; then
+            action_with_spinner_and_output "Stashing Changes" git stash push -m "$ARG1"
         else
-            error "Usage: fit check-unsafe origin"
+            action_with_spinner_and_output "Stashing Changes" git stash push
         fi
+        ;;
+
+    stash-pop)
+        selected_index=$(show_stash_list_and_select)
+        if [ $? -ne 0 ]; then
+            exit 0
+        fi
+        stash_ref="stash@{$selected_index}"
+        action_with_spinner_and_output "Popping Stash" git stash pop "$stash_ref"
+        ;;
+
+    stash-apply)
+        selected_index=$(show_stash_list_and_select)
+        if [ $? -ne 0 ]; then
+            exit 0
+        fi
+        stash_ref="stash@{$selected_index}"
+        action_with_spinner_and_output "Applying Stash" git stash apply "$stash_ref"
+        ;;
+
+    stash-clear)
+        stash_count=$(git stash list 2>/dev/null | wc -l | tr -d ' ')
+        if [ -z "$stash_count" ] || [ "$stash_count" -eq 0 ]; then
+            info "No stashes found."
+            exit 0
+        fi
+        
+        echo ""
+        echo -e "${TEAL}Warning: This will delete all $stash_count stash(es).${RESET}"
+        echo -e "${TEAL}This action cannot be undone.${RESET}"
+        echo ""
+        echo -e "${TEAL}Are you sure you want to delete all stashes? (yes/no):${RESET} "
+        read -r confirmation < /dev/tty
+        
+        if [ "$confirmation" != "yes" ]; then
+            info "Operation cancelled."
+            exit 0
+        fi
+        
+        action_with_spinner_and_output "Clearing All Stashes" git stash clear
+        info "All stashes have been deleted."
+        ;;
+
+    check-unsafe)
+        error "ERROR: This command has been disabled."
+        exit 1
         ;;
 
     commit)
@@ -461,7 +735,7 @@ case "$COMMAND" in
         fi
         
         if [ ! -f "$ZSHRC" ]; then
-            info "Warning: ~/.zshrc not found. Skipping zsh completion setup."
+            info "Warning: ~/.zshrc not found. Skipping zsh completion and alias setup."
         else
             if grep -q "fit completion" "$ZSHRC"; then
                 sed -i '/# fit completion/d' "$ZSHRC"
@@ -474,6 +748,11 @@ case "$COMMAND" in
                 info "Removed existing zsh completion configuration."
             fi
             
+            if grep -q "# fit aliases" "$ZSHRC"; then
+                sed -i '/# fit aliases/,/# end fit aliases/d' "$ZSHRC"
+                info "Removed existing fit aliases."
+            fi
+            
             echo "" >> "$ZSHRC"
             echo "# fit completion" >> "$ZSHRC"
             echo "fpath=($FIT_DIR \$fpath)" >> "$ZSHRC"
@@ -482,14 +761,50 @@ case "$COMMAND" in
             echo "# fit completion" >> "$ZSHRC"
             echo "compdef _fit fit" >> "$ZSHRC"
             
-            info "Zsh completion for fit has been updated in ~/.zshrc"
-            info "Run 'source ~/.zshrc' or restart your terminal to enable it."
+            echo "" >> "$ZSHRC"
+            echo "# fit aliases" >> "$ZSHRC"
+            
+            SCRIPT_PATH="$FIT_DIR/fit.sh"
+            if [ ! -f "$SCRIPT_PATH" ]; then
+                SCRIPT_PATH="$0"
+                if [ -L "$SCRIPT_PATH" ]; then
+                    SCRIPT_PATH=$(readlink -f "$SCRIPT_PATH" 2>/dev/null || readlink "$SCRIPT_PATH" 2>/dev/null || echo "$SCRIPT_PATH")
+                fi
+            fi
+            
+            if [ -f "$SCRIPT_PATH" ]; then
+                BLACKLIST="setup check-unsafe"
+                commands=$(sed -n '/^case "\$COMMAND" in$/,/^esac$/p' "$SCRIPT_PATH" 2>/dev/null | grep -E '^[[:space:]]+[a-z][a-z-]*\)' | sed 's/^[[:space:]]*\([a-z][a-z-]*\)).*/\1/' | sort -u)
+                
+                for cmd in $commands; do
+                    if [ -n "$cmd" ]; then
+                        is_blacklisted=false
+                        for blacklisted in $BLACKLIST; do
+                            if [ "$cmd" = "$blacklisted" ]; then
+                                is_blacklisted=true
+                                break
+                            fi
+                        done
+                        
+                        if [ "$is_blacklisted" = "false" ]; then
+                            alias_name="f-${cmd}"
+                            echo "alias ${alias_name}='fit ${cmd}'" >> "$ZSHRC"
+                        fi
+                    fi
+                done
+            fi
+            
+            echo "# end fit aliases" >> "$ZSHRC"
+            
+            info "Zsh completion and aliases for fit have been updated in ~/.zshrc"
+            info "Run 'source ~/.zshrc' or restart your terminal to enable them."
         fi
         
         action "Setup Complete"
         ;;
 
     *)
-        info "Usage: fit {rebase|commit|uncommit|push|log|branch|new-branch|check-unsafe|setup} [arg] [-unsafe]"
+        info "Usage: fit {rebase|commit|uncommit|push|log|branch|new-branch|setup|help} [arg] [-unsafe]"
+        info "Run 'fit help' for detailed information about all commands."
         ;;
 esac
