@@ -7,8 +7,23 @@ The goal is to minimise the need for a developer to think about git operations. 
 
 ### Homebrew (macOS & Linux)
 
+If you have a tap repository set up:
+
 ```bash
-brew install marecht/tap/fit
+brew tap marecht/tap
+brew install fit
+```
+
+Or install directly from this repository:
+
+```bash
+brew install marecht/fit/fit
+```
+
+After installation, run:
+
+```bash
+fit setup
 ```
 
 ### Manual Installation

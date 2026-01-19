@@ -1132,7 +1132,7 @@ case "$COMMAND" in
             fi
             
             if [ -f "$SCRIPT_PATH" ]; then
-                BLACKLIST="setup check-unsafe approved"
+                BLACKLIST="setup check-unsafe"
                 commands=$(sed -n '/^case "\$COMMAND" in$/,/^esac$/p' "$SCRIPT_PATH" 2>/dev/null | grep -E '^[[:space:]]+[a-z][a-z-]*\)' | sed 's/^[[:space:]]*\([a-z][a-z-]*\)).*/\1/' | sort -u)
                 
                 for cmd in $commands; do

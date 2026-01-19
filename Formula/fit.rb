@@ -12,14 +12,15 @@ class Fit < Formula
     bin.install "fit.sh" => "fit"
     prefix.install "config"
     prefix.install "_fit"
+    prefix.install "fit.bash"
     prefix.install "AGENT_DOCUMENTATION.md"
   end
 
   def post_install
-    ohai "Run 'fit setup' to configure git identity and zsh completion"
+    ohai "Run 'fit setup' to configure git identity, shell completion, and GitHub integration"
   end
 
   test do
-    system "#{bin}/fit", "setup"
+    system "#{bin}/fit", "--help"
   end
 end

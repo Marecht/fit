@@ -205,7 +205,47 @@ _fit_alias() {
     return 0
 }
 
+_fit_alias_name() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    
+    local fit_dir=""
+    if command -v brew >/dev/null 2>&1; then
+        local brew_prefix=$(brew --prefix 2>/dev/null)
+        if [ -n "$brew_prefix" ] && [ -f "$brew_prefix/opt/fit/fit.sh" ]; then
+            fit_dir="$brew_prefix/opt/fit"
+        fi
+    fi
+    if [ -z "$fit_dir" ] && [ -f "$HOME/.fit/fit.sh" ]; then
+        fit_dir="$HOME/.fit"
+    fi
+    
+    if [ -n "$fit_dir" ] && [ -f "$fit_dir/fit.sh" ]; then
+        local blacklist="setup check-unsafe approved"
+        local commands=$(sed -n '/^case "\$COMMAND" in$/,/^esac$/p' "$fit_dir/fit.sh" 2>/dev/null | grep -E '^[[:space:]]+[a-z][a-z-]*\)' | sed 's/^[[:space:]]*\([a-z][a-z-]*\)).*/\1/' | sort -u)
+        
+        local aliases=""
+        for cmd in $commands; do
+            is_blacklisted=false
+            for blacklisted in $blacklist; do
+                if [ "$cmd" = "$blacklisted" ]; then
+                    is_blacklisted=true
+                    break
+                fi
+            done
+            
+            if [ "$is_blacklisted" = "false" ]; then
+                aliases="$aliases f-${cmd}"
+            fi
+        done
+        
+        COMPREPLY=($(compgen -W "$aliases" -- "$cur"))
+    fi
+    
+    return 0
+}
+
 complete -F _fit fit
+complete -F _fit_alias_name f-
 
 if command -v fit >/dev/null 2>&1; then
     fit_dir=""
