@@ -146,6 +146,39 @@ GIT_USER_EMAIL=$(echo "$GIT_USER_EMAIL" | tr -d '\r' | xargs)
 GIT_USER_NAME=$(echo "$GIT_USER_NAME" | tr -d '\r' | xargs)
 USE_GITHUB=$(echo "$USE_GITHUB" | tr -d '\r' | xargs)
 
+# Helper function to get repository identifier from git remote URL
+get_repo_id() {
+    local remote_url=$(git config --get remote.origin.url 2>/dev/null)
+    if [ -z "$remote_url" ]; then
+        echo ""
+        return
+    fi
+    
+    local repo_id=$(echo "$remote_url" | sed -E 's|^https?://[^/]+/||; s|^git@[^:]+:||; s|\.git$||; s|/|_|g; s|[^a-zA-Z0-9_]|_|g')
+    echo "$repo_id"
+}
+
+# Helper function to get default branch (repo-specific first, then global)
+get_default_branch() {
+    local repo_id=$(get_repo_id)
+    local repo_default=""
+    
+    if [ -n "$repo_id" ] && [ -f "$FIT_CONFIG" ]; then
+        local repo_key="REPO_DEFAULT_BRANCH_${repo_id}"
+        local repo_line=$(grep "^${repo_key}=" "$FIT_CONFIG" 2>/dev/null | head -n 1)
+        if [ -n "$repo_line" ]; then
+            repo_default=$(echo "$repo_line" | sed -E 's/^[^=]*="([^"]*)".*/\1/' | sed -E "s/^[^=]*='([^']*)'.*/\1/")
+            repo_default=$(echo "$repo_default" | tr -d '\r' | xargs)
+        fi
+    fi
+    
+    if [ -n "$repo_default" ]; then
+        echo "$repo_default"
+    else
+        echo "$DEFAULT_BRANCH"
+    fi
+}
+
 COMMAND=$1
 UNSAFE_FLAG=false
 TASK_ID=""
@@ -195,14 +228,15 @@ check_origin() {
         return 0
     fi
     
-    action_with_spinner "Checking origin/$DEFAULT_BRANCH" git fetch --all --prune
+    local default_branch=$(get_default_branch)
+    action_with_spinner "Checking origin/$default_branch" git fetch --all --prune
     
     local current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
     if [ -z "$current_branch" ]; then
         return 0
     fi
     
-    local origin_ref="origin/$DEFAULT_BRANCH"
+    local origin_ref="origin/$default_branch"
     if ! git rev-parse --verify "$origin_ref" >/dev/null 2>&1; then
         return 0
     fi
@@ -268,7 +302,8 @@ capitalize() {
 }
 
 do_rebase() {
-    local target=${1:-$DEFAULT_BRANCH}
+    local default_branch=$(get_default_branch)
+    local target=${1:-$default_branch}
     action_with_spinner "Syncing with origin/$target" git fetch --all --prune
     save_branch_cache
     local rebase_exit_code
@@ -373,9 +408,9 @@ show_help() {
     echo ""
     
     echo -e "${CYAN}fit rebase [branch]${RESET}"
-    echo -e "${INDENT}${GRAY}Syncs and rebases the current branch onto the specified branch (defaults to DEFAULT_BRANCH).${RESET}"
+    echo -e "${INDENT}${GRAY}Syncs and rebases the current branch onto the specified branch (defaults to repository-specific or global DEFAULT_BRANCH).${RESET}"
     echo -e "${INDENT}${GRAY}Parameters:${RESET}"
-    echo -e "${INDENT}${INDENT}${GRAY}- branch (optional): Target branch to rebase onto. Defaults to DEFAULT_BRANCH from config.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- branch (optional): Target branch to rebase onto. Defaults to repository-specific default branch (if set) or global DEFAULT_BRANCH from config.${RESET}"
     echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- git fetch --all --prune${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- git rebase origin/<branch>${RESET}"
@@ -388,6 +423,16 @@ show_help() {
     echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- git fetch --all --prune${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- git checkout <branch-name>${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit default-repository-branch <branch-name>${RESET}"
+    echo -e "${INDENT}${GRAY}Sets a repository-specific default branch for the current repository.${RESET}"
+    echo -e "${INDENT}${GRAY}This overrides the global DEFAULT_BRANCH for this repository only.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- branch-name (required): Default branch name for this repository.${RESET}"
+    echo -e "${INDENT}${GRAY}Configuration:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Saved to config file as REPO_DEFAULT_BRANCH_<repo-id>${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Repository ID is derived from git remote origin URL${RESET}"
     echo ""
     
     echo -e "${CYAN}fit new-branch <identificator> \"commit message\" [-id task_id]${RESET}"
@@ -484,7 +529,8 @@ show_help() {
     echo -e "${INDENT}${INDENT}${GRAY}- git commit -m \"<message>\" --allow-empty (if message provided)${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- git commit --amend --no-edit --allow-empty (if no message)${RESET}"
     echo -e "${INDENT}${GRAY}Safety check:${RESET}"
-    echo -e "${INDENT}${INDENT}${GRAY}- Verifies local branch has new commits compared to origin/DEFAULT_BRANCH (when amending, unless -unsafe flag is used)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Verifies local branch has new commits compared to origin/<default-branch> (when amending, unless -unsafe flag is used)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Default branch is repository-specific (if set) or global DEFAULT_BRANCH${RESET}"
     echo ""
     
     echo -e "${CYAN}fit uncommit [-unsafe]${RESET}"
@@ -494,7 +540,8 @@ show_help() {
     echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- git reset --soft HEAD~1${RESET}"
     echo -e "${INDENT}${GRAY}Safety check:${RESET}"
-    echo -e "${INDENT}${INDENT}${GRAY}- Verifies local branch has new commits compared to origin/DEFAULT_BRANCH (unless -unsafe flag is used)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Verifies local branch has new commits compared to origin/<default-branch> (unless -unsafe flag is used)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Default branch is repository-specific (if set) or global DEFAULT_BRANCH${RESET}"
     echo ""
     
     echo -e "${CYAN}fit push [message] [-unsafe]${RESET}"
@@ -532,15 +579,17 @@ show_help() {
     echo ""
     echo -e "${CYAN}-unsafe${RESET}"
     echo -e "${INDENT}${GRAY}Bypasses the safety check that prevents operations when there are no new commits${RESET}"
-    echo -e "${INDENT}${GRAY}compared to origin/DEFAULT_BRANCH. Can be used with: commit, uncommit, push.${RESET}"
+    echo -e "${INDENT}${GRAY}compared to origin/<default-branch>. Can be used with: commit, uncommit, push.${RESET}"
+    echo -e "${INDENT}${GRAY}Default branch is repository-specific (if set) or global DEFAULT_BRANCH.${RESET}"
     echo ""
     
     echo -e "${TEAL}SAFETY CHECKS:${RESET}"
     echo ""
     echo -e "${INDENT}${GRAY}The check_origin() function verifies that the local branch has new commits${RESET}"
-    echo -e "${INDENT}${GRAY}compared to origin/DEFAULT_BRANCH. It uses:${RESET}"
+    echo -e "${INDENT}${GRAY}compared to origin/<default-branch>. It uses:${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- git rev-parse HEAD${RESET}"
-    echo -e "${INDENT}${INDENT}${GRAY}- git rev-parse origin/<DEFAULT_BRANCH>${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git rev-parse origin/<default-branch>${RESET}"
+    echo -e "${INDENT}${GRAY}Default branch is repository-specific (if set via fit default-repository-branch) or global DEFAULT_BRANCH.${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- git merge-base --is-ancestor${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- git rev-list --count${RESET}"
     echo ""
@@ -563,6 +612,35 @@ case "$COMMAND" in
         action_with_spinner "Fetching All Remotes" git fetch --all --prune
         save_branch_cache
         action_with_spinner_and_output "Checking Out Branch" git checkout "$ARG1"
+        ;;
+
+    default-repository-branch)
+        if [ -z "$ARG1" ]; then
+            error "Usage: fit default-repository-branch <branch-name>"
+            exit 1
+        fi
+        
+        if ! git rev-parse --git-dir >/dev/null 2>&1; then
+            error "ERROR: Not in a git repository!"
+            exit 1
+        fi
+        
+        repo_id=$(get_repo_id)
+        if [ -z "$repo_id" ]; then
+            error "ERROR: Could not determine repository identifier. Make sure you have a remote 'origin' configured."
+            exit 1
+        fi
+        
+        repo_key="REPO_DEFAULT_BRANCH_${repo_id}"
+        branch_name="$ARG1"
+        
+        if ! grep -q "^${repo_key}=" "$FIT_CONFIG" 2>/dev/null; then
+            echo "${repo_key}=\"${branch_name}\"" >> "$FIT_CONFIG"
+            info "Repository-specific default branch set to: $branch_name"
+        else
+            sed -i "s|^${repo_key}=.*|${repo_key}=\"${branch_name}\"|" "$FIT_CONFIG"
+            info "Repository-specific default branch updated to: $branch_name"
+        fi
         ;;
 
     new-branch)

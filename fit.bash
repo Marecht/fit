@@ -24,7 +24,7 @@ _fit() {
         use_github=$(echo "$USE_GITHUB" | tr -d '\r' | xargs)
     fi
     
-    local commands="rebase commit uncommit push log branch new-branch stash stash-pop stash-apply stash-clear setup help"
+    local commands="rebase commit uncommit push log branch default-repository-branch new-branch stash stash-pop stash-apply stash-clear setup help"
     
     if [ "$use_github" = "true" ]; then
         commands="$commands gh-reviews gh-checks"
@@ -67,6 +67,24 @@ _fit() {
                             COMPREPLY=($(compgen -W "$branches" -- "$cur"))
                         fi
                     fi
+                default-repository-branch)
+                default-repository-branch)\
+                    if [ $cword -eq 2 ]; then\
+                        if command -v git >/dev/null 2>&1; then\
+                            local branches\
+                            branches=$(git branch -r --format="%(refname:short)" 2>/dev/null | sed "s|origin/||" | sort -u | tr "\\n" " ")\
+                            COMPREPLY=($(compgen -W "$branches" -- "$cur"))\
+                        fi\
+                    fi\
+                    ;;
+                    if [ $cword -eq 2 ]; then
+                        if command -v git >/dev/null 2>&1; then
+                            local branches
+                            branches=$(git branch -r --format='%(refname:short)' 2>/dev/null | sed 's|origin/||' | sort -u | tr '\n' ' ')
+                            COMPREPLY=($(compgen -W "$branches" -- "$cur"))
+                        fi
+                    fi
+                    ;;
                     ;;
                 new-branch)
                     if [ $cword -eq 2 ]; then
@@ -154,6 +172,15 @@ _fit_alias() {
                         local cache_file=""
                         if command -v brew >/dev/null 2>&1; then
                             local brew_prefix=$(brew --prefix 2>/dev/null)
+                default-repository-branch)\
+                    if [ $cword -eq 2 ]; then\
+                        if command -v git >/dev/null 2>&1; then\
+                            local branches\
+                            branches=$(git branch -r --format="%(refname:short)" 2>/dev/null | sed "s|origin/||" | sort -u | tr "\\n" " ")\
+                            COMPREPLY=($(compgen -W "$branches" -- "$cur"))\
+                        fi\
+                    fi\
+                    ;;
                             if [ -n "$brew_prefix" ] && [ -f "$brew_prefix/opt/fit/.branch_cache" ]; then
                                 cache_file="$brew_prefix/opt/fit/.branch_cache"
                             fi
@@ -171,6 +198,15 @@ _fit_alias() {
                             COMPREPLY=($(compgen -W "$branches" -- "$cur"))
                         fi
                     fi
+                default-repository-branch)
+                    if [ $cword -eq 2 ]; then
+                        if command -v git >/dev/null 2>&1; then
+                            local branches
+                            branches=$(git branch -r --format='%(refname:short)' 2>/dev/null | sed 's|origin/||' | sort -u | tr '\n' ' ')
+                            COMPREPLY=($(compgen -W "$branches" -- "$cur"))
+                        fi
+                    fi
+                    ;;
                     ;;
                 new-branch)
                     if [ $cword -eq 2 ]; then
