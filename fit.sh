@@ -140,7 +140,11 @@ elif [[ -f "$HOME/.fit/config" ]]; then
     FIT_DIR="$HOME/.fit"
     FIT_CONFIG="$HOME/.fit/config"
 else
-    FIT_DIR="${0%/*}"
+    SCRIPT_PATH="$0"
+    if [ -L "$SCRIPT_PATH" ]; then
+        SCRIPT_PATH=$(readlink -f "$SCRIPT_PATH" 2>/dev/null || readlink "$SCRIPT_PATH" 2>/dev/null || echo "$SCRIPT_PATH")
+    fi
+    FIT_DIR="${SCRIPT_PATH%/*}"
     FIT_CONFIG="$FIT_DIR/config"
 fi
 
@@ -961,6 +965,12 @@ case "$COMMAND" in
     setup)
         CONFIG_FILE="$FIT_CONFIG"
         ZSHRC="$HOME/.zshrc"
+        
+        if [ ! -f "$CONFIG_FILE" ]; then
+            mkdir -p "$(dirname "$CONFIG_FILE")"
+            echo 'DEFAULT_BRANCH="master"' > "$CONFIG_FILE"
+            info "Created config file: $CONFIG_FILE"
+        fi
         
         source "$CONFIG_FILE"
         DEFAULT_BRANCH=$(echo "$DEFAULT_BRANCH" | tr -d '\r' | xargs)
