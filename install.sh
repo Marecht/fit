@@ -15,6 +15,7 @@ if [[ ! -f "$FIT_DIR/config" ]]; then
 fi
 
 cp _fit "$FIT_DIR/_fit" 2>/dev/null || true
+cp fit.bash "$FIT_DIR/fit.bash" 2>/dev/null || true
 cp AGENT_DOCUMENTATION.md "$FIT_DIR/" 2>/dev/null || true
 
 if [[ -f "$HOME/.zshrc" ]] && ! grep -q "fit" "$HOME/.zshrc"; then

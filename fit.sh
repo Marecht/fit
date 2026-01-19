@@ -510,7 +510,7 @@ show_help() {
     echo ""
     
     echo -e "${CYAN}fit setup${RESET}"
-    echo -e "${INDENT}${GRAY}Configures git identity, default branch, zsh completion, and creates command aliases.${RESET}"
+    echo -e "${INDENT}${GRAY}Configures git identity, default branch, shell completion, and creates command aliases.${RESET}"
     echo -e "${INDENT}${GRAY}Parameters:${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- None (interactive prompts)${RESET}"
     echo -e "${INDENT}${GRAY}Configuration saved to:${RESET}"
@@ -519,7 +519,8 @@ show_help() {
     echo -e "${INDENT}${INDENT}${GRAY}- Prompts for DEFAULT_BRANCH if not configured${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- Prompts for GIT_USER_EMAIL if not configured${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- Prompts for GIT_USER_NAME if not configured${RESET}"
-    echo -e "${INDENT}${INDENT}${GRAY}- Sets up zsh completion in ~/.zshrc${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Sets up zsh completion in ~/.zshrc (if ~/.zshrc exists)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Sets up bash completion in ~/.bashrc or /etc/bash_completion.d (if available)${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- Creates aliases (f-rebase, f-commit, f-push, etc.) in ~/.zshrc${RESET}"
     echo ""
     
@@ -1156,6 +1157,138 @@ case "$COMMAND" in
             
             info "Zsh completion and aliases for fit have been updated in ~/.zshrc"
             info "Run 'source ~/.zshrc' or restart your terminal to enable them."
+        fi
+        
+        BASHRC="$HOME/.bashrc"
+        BASH_PROFILE="$HOME/.bash_profile"
+        BASH_COMPLETION_DIR="/etc/bash_completion.d"
+        
+        if [ -f "$BASHRC" ] || [ -f "$BASH_PROFILE" ]; then
+            bash_file=""
+            if [ -f "$BASHRC" ]; then
+                bash_file="$BASHRC"
+            else
+                bash_file="$BASH_PROFILE"
+            fi
+            
+            if grep -q "# fit bash completion" "$bash_file"; then
+                sed -i '/# fit bash completion/,/# end fit bash completion/d' "$bash_file"
+                info "Removed existing bash completion configuration."
+            fi
+            
+            echo "" >> "$bash_file"
+            echo "# fit bash completion" >> "$bash_file"
+            if [ -d "$BASH_COMPLETION_DIR" ] && [ -w "$BASH_COMPLETION_DIR" ]; then
+                cp "$FIT_DIR/fit.bash" "$BASH_COMPLETION_DIR/fit" 2>/dev/null
+                if [ -f "/usr/share/bash-completion/bash_completion" ] || [ -f "/etc/bash_completion" ]; then
+                    info "Bash completion installed to $BASH_COMPLETION_DIR/fit"
+                    info "Bash completion will be automatically loaded by bash-completion."
+                else
+                    echo "source \"$FIT_DIR/fit.bash\"" >> "$bash_file"
+                    info "Bash completion installed to $BASH_COMPLETION_DIR/fit and added to $bash_file"
+                fi
+            else
+                echo "source \"$FIT_DIR/fit.bash\"" >> "$bash_file"
+                info "Bash completion added to $bash_file"
+            fi
+            echo "# end fit bash completion" >> "$bash_file"
+            
+            if grep -q "# fit aliases" "$bash_file"; then
+                sed -i '/# fit aliases/,/# end fit aliases/d' "$bash_file"
+                info "Removed existing fit aliases from $bash_file."
+            fi
+            
+            echo "" >> "$bash_file"
+            echo "# fit aliases" >> "$bash_file"
+            
+            SCRIPT_PATH="$FIT_DIR/fit.sh"
+            if [ ! -f "$SCRIPT_PATH" ]; then
+                SCRIPT_PATH="$0"
+                if [ -L "$SCRIPT_PATH" ]; then
+                    SCRIPT_PATH=$(readlink -f "$SCRIPT_PATH" 2>/dev/null || readlink "$SCRIPT_PATH" 2>/dev/null || echo "$SCRIPT_PATH")
+                fi
+            fi
+            
+            if [ -f "$SCRIPT_PATH" ]; then
+                BLACKLIST="setup check-unsafe approved"
+                commands=$(sed -n '/^case "\$COMMAND" in$/,/^esac$/p' "$SCRIPT_PATH" 2>/dev/null | grep -E '^[[:space:]]+[a-z][a-z-]*\)' | sed 's/^[[:space:]]*\([a-z][a-z-]*\)).*/\1/' | sort -u)
+                
+                for cmd in $commands; do
+                    if [ -n "$cmd" ]; then
+                        is_blacklisted=false
+                        for blacklisted in $BLACKLIST; do
+                            if [ "$cmd" = "$blacklisted" ]; then
+                                is_blacklisted=true
+                                break
+                            fi
+                        done
+                        
+                        if [ "$is_blacklisted" = "false" ]; then
+                            alias_name="f-${cmd}"
+                            echo "alias ${alias_name}='fit ${cmd}'" >> "$bash_file"
+                        fi
+                    fi
+                done
+            fi
+            
+            echo "# end fit aliases" >> "$bash_file"
+            
+            if grep -q "# fit f- completion" "$bash_file"; then
+                sed -i '/# fit f- completion/,/# end fit f- completion/d' "$bash_file"
+            fi
+            
+            echo "" >> "$bash_file"
+            echo "# fit f- completion" >> "$bash_file"
+            echo "_f_complete() {" >> "$bash_file"
+            echo "    local cur=\"\${COMP_WORDS[COMP_CWORD]}\"" >> "$bash_file"
+            echo "    if [ \${#COMP_WORDS[@]} -eq 2 ] && [[ \"\$cur\" == f-* ]]; then" >> "$bash_file"
+            echo "        local fit_dir=\"\"" >> "$bash_file"
+            echo "        if command -v brew >/dev/null 2>&1; then" >> "$bash_file"
+            echo "            local brew_prefix=\$(brew --prefix 2>/dev/null)" >> "$bash_file"
+            echo "            if [ -n \"\$brew_prefix\" ] && [ -f \"\$brew_prefix/opt/fit/fit.sh\" ]; then" >> "$bash_file"
+            echo "                fit_dir=\"\$brew_prefix/opt/fit\"" >> "$bash_file"
+            echo "            fi" >> "$bash_file"
+            echo "        fi" >> "$bash_file"
+            echo "        if [ -z \"\$fit_dir\" ] && [ -f \"\$HOME/.fit/fit.sh\" ]; then" >> "$bash_file"
+            echo "            fit_dir=\"\$HOME/.fit\"" >> "$bash_file"
+            echo "        fi" >> "$bash_file"
+            echo "        if [ -n \"\$fit_dir\" ] && [ -f \"\$fit_dir/fit.sh\" ]; then" >> "$bash_file"
+            echo "            local blacklist=\"setup check-unsafe approved\"" >> "$bash_file"
+            echo "            local commands=\$(sed -n '/^case \"\\\$COMMAND\" in\$/,/^esac\$/p' \"\$fit_dir/fit.sh\" 2>/dev/null | grep -E '^[[:space:]]+[a-z][a-z-]*\)' | sed 's/^[[:space:]]*\\([a-z][a-z-]*\\)).*/\\1/' | sort -u)" >> "$bash_file"
+            echo "            local aliases=\"\"" >> "$bash_file"
+            echo "            for cmd in \$commands; do" >> "$bash_file"
+            echo "                is_blacklisted=false" >> "$bash_file"
+            echo "                for blacklisted in \$blacklist; do" >> "$bash_file"
+            echo "                    if [ \"\$cmd\" = \"\$blacklisted\" ]; then" >> "$bash_file"
+            echo "                        is_blacklisted=true" >> "$bash_file"
+            echo "                        break" >> "$bash_file"
+            echo "                    fi" >> "$bash_file"
+            echo "                done" >> "$bash_file"
+            echo "                if [ \"\$is_blacklisted\" = \"false\" ]; then" >> "$bash_file"
+            echo "                    aliases=\"\$aliases f-\${cmd}\"" >> "$bash_file"
+            echo "                fi" >> "$bash_file"
+            echo "            done" >> "$bash_file"
+            echo "            COMPREPLY=(\$(compgen -W \"\$aliases\" -- \"\$cur\"))" >> "$bash_file"
+            echo "        fi" >> "$bash_file"
+            echo "    else" >> "$bash_file"
+            echo "        local alias_cmd=\"\${COMP_WORDS[1]}\"" >> "$bash_file"
+            echo "        local fit_cmd=\"\${alias_cmd#f-}\"" >> "$bash_file"
+            echo "        COMP_WORDS[1]=\"\$fit_cmd\"" >> "$bash_file"
+            echo "        _fit" >> "$bash_file"
+            echo "    fi" >> "$bash_file"
+            echo "}" >> "$bash_file"
+            echo "complete -F _f_complete f-" >> "$bash_file"
+            echo "# end fit f- completion" >> "$bash_file"
+            
+            info "Bash completion and aliases for fit have been configured."
+            info "Run 'source $bash_file' or restart your terminal to enable them."
+        else
+            if [ -d "$BASH_COMPLETION_DIR" ] && [ -w "$BASH_COMPLETION_DIR" ]; then
+                cp "$FIT_DIR/fit.bash" "$BASH_COMPLETION_DIR/fit" 2>/dev/null
+                info "Bash completion installed to $BASH_COMPLETION_DIR/fit"
+            else
+                info "Warning: ~/.bashrc or ~/.bash_profile not found. Bash completion not configured."
+            fi
         fi
         
         action "Setup Complete"
