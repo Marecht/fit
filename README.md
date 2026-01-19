@@ -4,7 +4,7 @@ A terminal-based Git workflow tool that provides an intuitive interface for comm
 
 ## Installation
 
-### Homebrew (macOS & Linux)
+### Homebrew [macOS & Linux]
 
 Install directly from this repository:
 
@@ -101,6 +101,46 @@ Most commands include safety checks to prevent accidental operations:
 - `commit`, `uncommit`, and `push` verify that the local branch has new commits compared to `origin/DEFAULT_BRANCH`
 - Use the `-unsafe` flag to bypass these checks when needed
 - `stash-clear` requires explicit confirmation before deleting all stashes
+
+
+# Workflow Rules & The "fit" Philosophy
+
+### 1. Always Rebase — Never Merge
+Avoid merge commits. Use rebasing to keep your feature branch's history linear. This ensures that when your work is integrated into the main branch, it appears as a straight line rather than a complex web of junctions.
+
+*  Standard Git makes merging the "path of least resistance." `fit` reverses this by making rebasing the default (and often only) way to integrate changes. With fit, all operations use rebase, ensuring a clean history is the natural outcome of using this tool.
+
+
+### 2. Minimize Commit Count
+Keep the number of commits as low as possible. A single feature should ideally be represented by a single, comprehensive commit rather than dozens of "work in progress" snapshots.
+
+* `fit` recognizes that "checkpoint" commits are a developer's safety net but a project's clutter. It provides streamlined "amend" or "absorb" logic, allowing you to save your progress locally while automatically squashing changes into a single logical commit before they ever reach the remote.
+
+### 3. Contextual Commits and Working State
+Each commit should make sense in the context of the whole application, not just the branch. In most cases, it should represent a whole feature. This results in a cleaner, more readable project history.
+The application should be left in a functional, working state after each commit. This practice simplifies conflict resolution and ensures the codebase remains stable.
+
+
+*  By reducing the friction of rewriting history, `fit` encourages you to curate your work. It provides an interface that emphasizes the "Feature" over the "File Change," prompting you to finalize work only when it adds distinct value to the overall application context.
+
+### 4. Single-Person Branches
+Each branch should be worked on by a single person. This avoids "collaboration friction" and prevents the need for complex internal merges within a feature branch.
+
+* Since `fit` is optimized for a linear, rebase-heavy workflow, it assumes a high level of branch ownership.
+
+
+### 5. Rebase with Master Frequently
+Rebase with the `master` or `main` branch each time you commit or before you push.
+
+* **Stay Up-to-Date:** The more up-to-date the branch is with `master`, the better.
+* **Conflict Prevention:** Prevents complicated multi-commit conflicts from piling up.
+* **CI Efficiency:** Prevents GitHub Runners from unnecessarily starting on PRs with conflicts.
+
+
+`fit` handles rebasing automatically at logical checkpoints, removing the need for you to manually track the state of `master`. By making these updates invisible and routine, it ensures you are always working against the most recent code. 
+
+Furthermore, `fit` acts as a safety gate: it proactively prevents you from pushing if a conflict exists, forcing you to resolve issues locally and immediately. This shift ensures that conflicts are handled while the context is still fresh in your mind, keeping the remote repository and CI pipeline clean and "green" at all times.
+
 
 ## License
 
