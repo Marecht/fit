@@ -1,6 +1,24 @@
 #compdef fit
 
 _fit() {
+    local config_file=""
+    local use_github="false"
+    
+    if command -v brew >/dev/null 2>&1; then
+        local brew_prefix=$(brew --prefix 2>/dev/null)
+        if [ -n "$brew_prefix" ] && [ -f "$brew_prefix/opt/fit/config" ]; then
+            config_file="$brew_prefix/opt/fit/config"
+        fi
+    fi
+    if [ -z "$config_file" ] && [ -f "$HOME/.fit/config" ]; then
+        config_file="$HOME/.fit/config"
+    fi
+    
+    if [ -n "$config_file" ] && [ -f "$config_file" ]; then
+        source "$config_file" 2>/dev/null
+        use_github=$(echo "$USE_GITHUB" | tr -d '\r' | xargs)
+    fi
+    
     local -a commands
     commands=(
         'rebase:sync and rebase onto a branch'
@@ -17,6 +35,11 @@ _fit() {
         'setup:configure git identity and zsh completion'
         'help:display detailed help information'
     )
+    
+    if [ "$use_github" = "true" ]; then
+        commands+=('gh-reviews:show PR review status for all branches')
+        commands+=('gh-checks:show CI checks status for all branches')
+    fi
 
     local state
     _arguments -C \
@@ -87,7 +110,7 @@ _fit() {
                 commit|push|stash)
                     _message
                     ;;
-                uncommit|stash-pop|stash-apply|stash-clear)
+                uncommit|stash-pop|stash-apply|stash-clear|gh-reviews|gh-checks)
                     ;;
             esac
             ;;
