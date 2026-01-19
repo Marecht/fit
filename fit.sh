@@ -116,6 +116,17 @@ run_git() {
     return $exit_code
 }
 
+# Cross-platform sed -i helper (works on both macOS and Linux)
+sed_in_place() {
+    local file="$1"
+    shift
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' "$@" "$file"
+    else
+        sed -i "$@" "$file"
+    fi
+}
+
 # Determine fit directory (Homebrew or local installation)
 BREW_PREFIX=""
 if command -v brew >/dev/null 2>&1; then
@@ -638,7 +649,7 @@ case "$COMMAND" in
             echo "${repo_key}=\"${branch_name}\"" >> "$FIT_CONFIG"
             info "Repository-specific default branch set to: $branch_name"
         else
-            sed -i "s|^${repo_key}=.*|${repo_key}=\"${branch_name}\"|" "$FIT_CONFIG"
+            sed_in_place "$FIT_CONFIG" "s|^${repo_key}=.*|${repo_key}=\"${branch_name}\"|"
             info "Repository-specific default branch updated to: $branch_name"
         fi
         ;;
@@ -968,7 +979,7 @@ case "$COMMAND" in
             if ! grep -q "^DEFAULT_BRANCH=" "$CONFIG_FILE" 2>/dev/null; then
                 echo "DEFAULT_BRANCH=\"$DEFAULT_BRANCH\"" >> "$CONFIG_FILE"
             else
-                sed -i "s|^DEFAULT_BRANCH=.*|DEFAULT_BRANCH=\"$DEFAULT_BRANCH\"|" "$CONFIG_FILE"
+                sed_in_place "$CONFIG_FILE" "s|^DEFAULT_BRANCH=.*|DEFAULT_BRANCH=\"$DEFAULT_BRANCH\"|"
             fi
             info "Default branch saved to config."
             action "Setting Up Default Branch"
@@ -986,11 +997,11 @@ case "$COMMAND" in
                     error "Error: Email is required."
                     exit 1
                 fi
-                if ! grep -q "^GIT_USER_EMAIL=" "$CONFIG_FILE" 2>/dev/null; then
-                    echo "GIT_USER_EMAIL=\"$GIT_USER_EMAIL\"" >> "$CONFIG_FILE"
-                else
-                    sed -i "s|^GIT_USER_EMAIL=.*|GIT_USER_EMAIL=\"$GIT_USER_EMAIL\"|" "$CONFIG_FILE"
-                fi
+            if ! grep -q "^GIT_USER_EMAIL=" "$CONFIG_FILE" 2>/dev/null; then
+                echo "GIT_USER_EMAIL=\"$GIT_USER_EMAIL\"" >> "$CONFIG_FILE"
+            else
+                sed_in_place "$CONFIG_FILE" "s|^GIT_USER_EMAIL=.*|GIT_USER_EMAIL=\"$GIT_USER_EMAIL\"|"
+            fi
             fi
             
             if [ -z "$GIT_USER_NAME" ]; then
@@ -999,11 +1010,11 @@ case "$COMMAND" in
                     error "Error: Name is required."
                     exit 1
                 fi
-                if ! grep -q "^GIT_USER_NAME=" "$CONFIG_FILE" 2>/dev/null; then
-                    echo "GIT_USER_NAME=\"$GIT_USER_NAME\"" >> "$CONFIG_FILE"
-                else
-                    sed -i "s|^GIT_USER_NAME=.*|GIT_USER_NAME=\"$GIT_USER_NAME\"|" "$CONFIG_FILE"
-                fi
+            if ! grep -q "^GIT_USER_NAME=" "$CONFIG_FILE" 2>/dev/null; then
+                echo "GIT_USER_NAME=\"$GIT_USER_NAME\"" >> "$CONFIG_FILE"
+            else
+                sed_in_place "$CONFIG_FILE" "s|^GIT_USER_NAME=.*|GIT_USER_NAME=\"$GIT_USER_NAME\"|"
+            fi
             fi
             
             info "Git identity saved to config."
@@ -1137,20 +1148,20 @@ case "$COMMAND" in
                     fi
                 fi
                 
-                if ! grep -q "^USE_GITHUB=" "$CONFIG_FILE" 2>/dev/null; then
-                    echo "USE_GITHUB=\"$USE_GITHUB\"" >> "$CONFIG_FILE"
-                else
-                    sed -i "s|^USE_GITHUB=.*|USE_GITHUB=\"$USE_GITHUB\"|" "$CONFIG_FILE"
-                fi
+                    if ! grep -q "^USE_GITHUB=" "$CONFIG_FILE" 2>/dev/null; then
+                        echo "USE_GITHUB=\"$USE_GITHUB\"" >> "$CONFIG_FILE"
+                    else
+                        sed_in_place "$CONFIG_FILE" "s|^USE_GITHUB=.*|USE_GITHUB=\"$USE_GITHUB\"|"
+                    fi
                 
                 action "Setting Up GitHub"
             else
                 USE_GITHUB="false"
-                if ! grep -q "^USE_GITHUB=" "$CONFIG_FILE" 2>/dev/null; then
-                    echo "USE_GITHUB=\"false\"" >> "$CONFIG_FILE"
-                else
-                    sed -i "s|^USE_GITHUB=.*|USE_GITHUB=\"false\"|" "$CONFIG_FILE"
-                fi
+                    if ! grep -q "^USE_GITHUB=" "$CONFIG_FILE" 2>/dev/null; then
+                        echo "USE_GITHUB=\"false\"" >> "$CONFIG_FILE"
+                    else
+                        sed_in_place "$CONFIG_FILE" "s|^USE_GITHUB=.*|USE_GITHUB=\"false\"|"
+                    fi
                 info "GitHub integration skipped."
             fi
         else
@@ -1175,18 +1186,18 @@ case "$COMMAND" in
             info "Warning: ~/.zshrc not found. Skipping zsh completion and alias setup."
         else
             if grep -q "fit completion" "$ZSHRC"; then
-                sed -i '/# fit completion/d' "$ZSHRC"
-                sed -i '/fpath=.*\.fit/d' "$ZSHRC"
-                sed -i '/autoload -Uz compinit && compinit/d' "$ZSHRC"
-                sed -i '/fit quick completion/d' "$ZSHRC"
-                sed -i '/compdef _fit fit/d' "$ZSHRC"
-                sed -i '/expand-f-to-fit/d' "$ZSHRC"
-                sed -i '/bindkey.*expand-f-to-fit/d' "$ZSHRC"
+                sed_in_place "$ZSHRC" '/# fit completion/d'
+                sed_in_place "$ZSHRC" '/fpath=.*\.fit/d'
+                sed_in_place "$ZSHRC" '/autoload -Uz compinit && compinit/d'
+                sed_in_place "$ZSHRC" '/fit quick completion/d'
+                sed_in_place "$ZSHRC" '/compdef _fit fit/d'
+                sed_in_place "$ZSHRC" '/expand-f-to-fit/d'
+                sed_in_place "$ZSHRC" '/bindkey.*expand-f-to-fit/d'
                 info "Removed existing zsh completion configuration."
             fi
             
             if grep -q "# fit aliases" "$ZSHRC"; then
-                sed -i '/# fit aliases/,/# end fit aliases/d' "$ZSHRC"
+                sed_in_place "$ZSHRC" '/# fit aliases/,/# end fit aliases/d'
                 info "Removed existing fit aliases."
             fi
             
@@ -1250,7 +1261,7 @@ case "$COMMAND" in
             fi
             
             if grep -q "# fit bash completion" "$bash_file"; then
-                sed -i '/# fit bash completion/,/# end fit bash completion/d' "$bash_file"
+                sed_in_place "$bash_file" '/# fit bash completion/,/# end fit bash completion/d'
                 info "Removed existing bash completion configuration."
             fi
             
@@ -1272,7 +1283,7 @@ case "$COMMAND" in
             echo "# end fit bash completion" >> "$bash_file"
             
             if grep -q "# fit aliases" "$bash_file"; then
-                sed -i '/# fit aliases/,/# end fit aliases/d' "$bash_file"
+                sed_in_place "$bash_file" '/# fit aliases/,/# end fit aliases/d'
                 info "Removed existing fit aliases from $bash_file."
             fi
             
@@ -1312,7 +1323,7 @@ case "$COMMAND" in
             echo "# end fit aliases" >> "$bash_file"
             
             if grep -q "# fit f- completion" "$bash_file"; then
-                sed -i '/# fit f- completion/,/# end fit f- completion/d' "$bash_file"
+                sed_in_place "$bash_file" '/# fit f- completion/,/# end fit f- completion/d'
             fi
             
             echo "" >> "$bash_file"
