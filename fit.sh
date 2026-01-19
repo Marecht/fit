@@ -144,6 +144,7 @@ source "$FIT_CONFIG"
 DEFAULT_BRANCH=$(echo "$DEFAULT_BRANCH" | tr -d '\r' | xargs)
 GIT_USER_EMAIL=$(echo "$GIT_USER_EMAIL" | tr -d '\r' | xargs)
 GIT_USER_NAME=$(echo "$GIT_USER_NAME" | tr -d '\r' | xargs)
+USE_GITHUB=$(echo "$USE_GITHUB" | tr -d '\r' | xargs)
 
 COMMAND=$1
 UNSAFE_FLAG=false
@@ -451,6 +452,28 @@ show_help() {
     echo -e "${INDENT}${INDENT}${GRAY}- git stash clear${RESET}"
     echo ""
     
+    if [ "$USE_GITHUB" = "true" ]; then
+        echo -e "${CYAN}fit gh-reviews${RESET}"
+        echo -e "${INDENT}${GRAY}Displays all branches and their pull request review status.${RESET}"
+        echo -e "${INDENT}${GRAY}Shows: pending, approved, or changes requested.${RESET}"
+        echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+        echo -e "${INDENT}${INDENT}${GRAY}- None${RESET}"
+        echo -e "${INDENT}${GRAY}GitHub CLI commands executed:${RESET}"
+        echo -e "${INDENT}${INDENT}${GRAY}- gh pr list --repo <repo> --head <branch>${RESET}"
+        echo -e "${INDENT}${INDENT}${GRAY}- gh pr view <number> --repo <repo>${RESET}"
+        echo ""
+        
+        echo -e "${CYAN}fit gh-checks${RESET}"
+        echo -e "${INDENT}${GRAY}Displays all branches and their CI checks status.${RESET}"
+        echo -e "${INDENT}${GRAY}Shows: passed, failed, or pending checks for each PR.${RESET}"
+        echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+        echo -e "${INDENT}${INDENT}${GRAY}- None${RESET}"
+        echo -e "${INDENT}${GRAY}GitHub CLI commands executed:${RESET}"
+        echo -e "${INDENT}${INDENT}${GRAY}- gh pr list --repo <repo> --head <branch>${RESET}"
+        echo -e "${INDENT}${INDENT}${GRAY}- gh pr checks <number> --repo <repo>${RESET}"
+        echo ""
+    fi
+    
     echo -e "${CYAN}fit commit [message] [-unsafe]${RESET}"
     echo -e "${INDENT}${GRAY}Stages all changes and creates a new commit or amends the last commit.${RESET}"
     echo -e "${INDENT}${GRAY}Parameters:${RESET}"
@@ -633,6 +656,179 @@ case "$COMMAND" in
         info "All stashes have been deleted."
         ;;
 
+    gh-reviews)
+        if [ "$USE_GITHUB" != "true" ]; then
+            error "GitHub integration is not enabled. Run 'fit setup' to enable it."
+            exit 1
+        fi
+        
+        if ! command -v gh >/dev/null 2>&1; then
+            error "GitHub CLI (gh) is not installed."
+            exit 1
+        fi
+        
+        if ! gh auth status >/dev/null 2>&1; then
+            error "Not authenticated with GitHub. Run 'gh auth login' or 'fit setup'."
+            exit 1
+        fi
+        
+        repo=$(git remote get-url origin 2>/dev/null | sed -E 's/.*github\.com[:/]([^/]+\/[^/]+)(\.git)?$/\1/' | sed 's/\.git$//')
+        if [ -z "$repo" ]; then
+            error "Could not determine GitHub repository. Make sure you're in a git repository with a GitHub remote."
+            exit 1
+        fi
+        
+        echo ""
+        echo -e "${TEAL}Pull Request Reviews for: ${repo}${RESET}"
+        echo ""
+        
+        branches=$(git branch -r --format='%(refname:short)' 2>/dev/null | sed 's|origin/||' | grep -v HEAD | sort -u)
+        
+        for branch in $branches; do
+            pr_json=$(gh pr list --repo "$repo" --head "$branch" --json number,title,state,reviews 2>/dev/null)
+            
+            if [ -z "$pr_json" ] || [ "$pr_json" = "[]" ]; then
+                continue
+            fi
+            
+            pr_number=$(echo "$pr_json" | grep -o '"number":[0-9]*' | head -1 | cut -d':' -f2)
+            pr_title=$(echo "$pr_json" | grep -o '"title":"[^"]*"' | head -1 | sed 's/"title":"\([^"]*\)"/\1/')
+            
+            if [ -z "$pr_number" ]; then
+                continue
+            fi
+            
+            reviews_json=$(gh pr view "$pr_number" --repo "$repo" --json reviews 2>/dev/null)
+            
+            review_state="pending"
+            if echo "$reviews_json" | grep -q '"state":"APPROVED"'; then
+                if ! echo "$reviews_json" | grep -q '"state":"CHANGES_REQUESTED"'; then
+                    review_state="approved"
+                fi
+            fi
+            if echo "$reviews_json" | grep -q '"state":"CHANGES_REQUESTED"'; then
+                review_state="changes requested"
+            fi
+            
+            echo -e "${INDENT}${CYAN}$branch${RESET}"
+            if [ -n "$pr_title" ]; then
+                echo -e "${INDENT}${INDENT}${GRAY}PR #$pr_number: $pr_title${RESET}"
+            else
+                echo -e "${INDENT}${INDENT}${GRAY}PR #$pr_number${RESET}"
+            fi
+            case "$review_state" in
+                approved)
+                    echo -e "${INDENT}${INDENT}${YELLOW}Review State:${RESET} ${GRAY}approved${RESET}"
+                    ;;
+                "changes requested")
+                    echo -e "${INDENT}${INDENT}${YELLOW}Review State:${RESET} ${RED}changes requested${RESET}"
+                    ;;
+                *)
+                    echo -e "${INDENT}${INDENT}${YELLOW}Review State:${RESET} ${GRAY}pending${RESET}"
+                    ;;
+            esac
+            echo ""
+        done
+        ;;
+
+    gh-checks)
+        if [ "$USE_GITHUB" != "true" ]; then
+            error "GitHub integration is not enabled. Run 'fit setup' to enable it."
+            exit 1
+        fi
+        
+        if ! command -v gh >/dev/null 2>&1; then
+            error "GitHub CLI (gh) is not installed."
+            exit 1
+        fi
+        
+        if ! gh auth status >/dev/null 2>&1; then
+            error "Not authenticated with GitHub. Run 'gh auth login' or 'fit setup'."
+            exit 1
+        fi
+        
+        repo=$(git remote get-url origin 2>/dev/null | sed -E 's/.*github\.com[:/]([^/]+\/[^/]+)(\.git)?$/\1/' | sed 's/\.git$//')
+        if [ -z "$repo" ]; then
+            error "Could not determine GitHub repository. Make sure you're in a git repository with a GitHub remote."
+            exit 1
+        fi
+        
+        echo ""
+        echo -e "${TEAL}CI Checks Status for: ${repo}${RESET}"
+        echo ""
+        
+        branches=$(git branch -r --format='%(refname:short)' 2>/dev/null | sed 's|origin/||' | grep -v HEAD | sort -u)
+        
+        for branch in $branches; do
+            pr_json=$(gh pr list --repo "$repo" --head "$branch" --json number,title,state 2>/dev/null)
+            
+            if [ -z "$pr_json" ] || [ "$pr_json" = "[]" ]; then
+                continue
+            fi
+            
+            pr_number=$(echo "$pr_json" | grep -o '"number":[0-9]*' | head -1 | cut -d':' -f2)
+            pr_title=$(echo "$pr_json" | grep -o '"title":"[^"]*"' | head -1 | sed 's/"title":"\([^"]*\)"/\1/')
+            
+            if [ -z "$pr_number" ]; then
+                continue
+            fi
+            
+            checks_json=$(gh pr checks "$pr_number" --repo "$repo" --json name,state,bucket 2>/dev/null)
+            
+            if [ -z "$checks_json" ] || [ "$checks_json" = "[]" ]; then
+                continue
+            fi
+            
+            echo -e "${INDENT}${CYAN}$branch${RESET}"
+            if [ -n "$pr_title" ]; then
+                echo -e "${INDENT}${INDENT}${GRAY}PR #$pr_number: $pr_title${RESET}"
+            else
+                echo -e "${INDENT}${INDENT}${GRAY}PR #$pr_number${RESET}"
+            fi
+            
+            if command -v jq >/dev/null 2>&1; then
+                check_count=$(echo "$checks_json" | jq 'length' 2>/dev/null || echo "0")
+                if [ "$check_count" = "0" ]; then
+                    echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${GRAY}No checks found${RESET}"
+                else
+                    pass_count=$(echo "$checks_json" | jq '[.[] | select(.bucket == "pass")] | length' 2>/dev/null || echo "0")
+                    fail_count=$(echo "$checks_json" | jq '[.[] | select(.bucket == "fail")] | length' 2>/dev/null || echo "0")
+                    pending_count=$(echo "$checks_json" | jq '[.[] | select(.bucket == "pending")] | length' 2>/dev/null || echo "0")
+                    
+                    if [ "$fail_count" -gt 0 ]; then
+                        echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${RED}failed ($fail_count)${RESET}"
+                    elif [ "$pending_count" -gt 0 ]; then
+                        echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${YELLOW}pending ($pending_count)${RESET}"
+                    elif [ "$pass_count" -eq "$check_count" ]; then
+                        echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${GRAY}passed ($pass_count/$check_count)${RESET}"
+                    else
+                        echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${GRAY}partial ($pass_count/$check_count)${RESET}"
+                    fi
+                fi
+            else
+                check_lines=$(echo "$checks_json" | grep -c '"name"' 2>/dev/null || echo "0")
+                if [ "$check_lines" -eq 0 ]; then
+                    echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${GRAY}No checks found${RESET}"
+                else
+                    pass_count=$(echo "$checks_json" | grep -o '"bucket":"pass"' | wc -l)
+                    fail_count=$(echo "$checks_json" | grep -o '"bucket":"fail"' | wc -l)
+                    pending_count=$(echo "$checks_json" | grep -o '"bucket":"pending"' | wc -l)
+                    
+                    if [ "$fail_count" -gt 0 ]; then
+                        echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${RED}failed ($fail_count)${RESET}"
+                    elif [ "$pending_count" -gt 0 ]; then
+                        echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${YELLOW}pending ($pending_count)${RESET}"
+                    elif [ "$pass_count" -eq "$check_lines" ]; then
+                        echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${GRAY}passed ($pass_count/$check_lines)${RESET}"
+                    else
+                        echo -e "${INDENT}${INDENT}${YELLOW}Checks:${RESET} ${GRAY}partial ($pass_count/$check_lines)${RESET}"
+                    fi
+                fi
+            fi
+            echo ""
+        done
+        ;;
+
     check-unsafe)
         error "ERROR: This command has been disabled."
         exit 1
@@ -680,9 +876,11 @@ case "$COMMAND" in
         DEFAULT_BRANCH=$(echo "$DEFAULT_BRANCH" | tr -d '\r' | xargs)
         GIT_USER_EMAIL=$(echo "$GIT_USER_EMAIL" | tr -d '\r' | xargs)
         GIT_USER_NAME=$(echo "$GIT_USER_NAME" | tr -d '\r' | xargs)
+        USE_GITHUB=$(echo "$USE_GITHUB" | tr -d '\r' | xargs)
         
         if [ -z "$DEFAULT_BRANCH" ]; then
-            action_start "Setting Up Default Branch"
+            echo ""
+            echo -e "${INDENT}${TEAL}Setting Up Default Branch${RESET}"
             read -p "Enter your default branch name (e.g., master, main): " DEFAULT_BRANCH
             if [ -z "$DEFAULT_BRANCH" ]; then
                 error "Error: Default branch is required."
@@ -694,13 +892,14 @@ case "$COMMAND" in
                 sed -i "s|^DEFAULT_BRANCH=.*|DEFAULT_BRANCH=\"$DEFAULT_BRANCH\"|" "$CONFIG_FILE"
             fi
             info "Default branch saved to config."
-            action_end "Setting Up Default Branch"
+            action "Setting Up Default Branch"
         else
             info "Default branch already configured: $DEFAULT_BRANCH"
         fi
         
         if [ -z "$GIT_USER_EMAIL" ] || [ -z "$GIT_USER_NAME" ]; then
-            action_start "Setting Up Git Identity"
+            echo ""
+            echo -e "${INDENT}${TEAL}Setting Up Git Identity${RESET}"
             
             if [ -z "$GIT_USER_EMAIL" ]; then
                 read -p "Enter your git email: " GIT_USER_EMAIL
@@ -729,9 +928,168 @@ case "$COMMAND" in
             fi
             
             info "Git identity saved to config."
-            action_end "Setting Up Git Identity"
+            action "Setting Up Git Identity"
         else
             info "Git identity already configured."
+        fi
+        
+        if [ "$USE_GITHUB" != "true" ]; then
+            echo ""
+            read -p "Do you want to connect your GitHub account? (yes/no): " connect_github
+            if [ "$connect_github" = "yes" ] || [ "$connect_github" = "y" ]; then
+                echo ""
+                echo -e "${INDENT}${TEAL}Setting Up GitHub${RESET}"
+                
+                if ! command -v gh >/dev/null 2>&1; then
+                    info "GitHub CLI not found. Installing..."
+                    if command -v brew >/dev/null 2>&1; then
+                        action_with_spinner_and_output "Installing GitHub CLI" brew install gh
+                        hash -r
+                    elif command -v apt-get >/dev/null 2>&1; then
+                        if [ "$(id -u)" -eq 0 ]; then
+                            if [ ! -f /etc/apt/sources.list.d/github-cli.list ]; then
+                                info "Adding GitHub CLI repository..."
+                                curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null
+                                chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null
+                                echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+                            fi
+                            install_output=$(mktemp)
+                            action_start "Installing GitHub CLI"
+                            if apt-get update > "$install_output" 2>&1 && apt-get install -y gh >> "$install_output" 2>&1; then
+                                action_end "Installing GitHub CLI"
+                                while IFS= read -r line || [ -n "$line" ]; do
+                                    [ -n "$line" ] && info "$line"
+                                done < "$install_output"
+                                rm -f "$install_output"
+                            else
+                                action_end "Installing GitHub CLI"
+                                error "Installation failed. Output:"
+                                while IFS= read -r line || [ -n "$line" ]; do
+                                    [ -n "$line" ] && error "$line"
+                                done < "$install_output"
+                                rm -f "$install_output"
+                                error "Please install GitHub CLI manually: https://cli.github.com/"
+                                exit 1
+                            fi
+                        else
+                            info "Sudo access is required to install GitHub CLI. You may be prompted for your password."
+                            if [ ! -f /etc/apt/sources.list.d/github-cli.list ]; then
+                                info "Adding GitHub CLI repository..."
+                                if ! curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null; then
+                                    error "Failed to add GitHub CLI repository key."
+                                    exit 1
+                                fi
+                                sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null
+                                echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+                            fi
+                            install_output=$(mktemp)
+                            action_start "Installing GitHub CLI"
+                            if sudo apt-get update > "$install_output" 2>&1 && sudo apt-get install -y gh >> "$install_output" 2>&1; then
+                                action_end "Installing GitHub CLI"
+                                while IFS= read -r line || [ -n "$line" ]; do
+                                    [ -n "$line" ] && info "$line"
+                                done < "$install_output"
+                                rm -f "$install_output"
+                            else
+                                action_end "Installing GitHub CLI"
+                                error "Installation failed. Output:"
+                                while IFS= read -r line || [ -n "$line" ]; do
+                                    [ -n "$line" ] && error "$line"
+                                done < "$install_output"
+                                rm -f "$install_output"
+                                error "Please run: sudo fit setup"
+                                error "Or install GitHub CLI manually: https://cli.github.com/"
+                                exit 1
+                            fi
+                        fi
+                        hash -r
+                        if ! command -v gh >/dev/null 2>&1; then
+                            for gh_path in /usr/bin/gh /usr/local/bin/gh /snap/bin/gh; do
+                                if [ -f "$gh_path" ] && [ -x "$gh_path" ]; then
+                                    export PATH="$(dirname "$gh_path"):$PATH"
+                                    break
+                                fi
+                            done
+                            if ! command -v gh >/dev/null 2>&1 && dpkg -l | grep -q "^ii.*gh "; then
+                                info "GitHub CLI package is installed. Trying to locate binary..."
+                                gh_location=$(dpkg -L gh 2>/dev/null | grep -E '/bin/gh$' | head -1)
+                                if [ -n "$gh_location" ] && [ -x "$gh_location" ]; then
+                                    export PATH="$(dirname "$gh_location"):$PATH"
+                                fi
+                            fi
+                        fi
+                    elif command -v yum >/dev/null 2>&1; then
+                        if [ "$(id -u)" -eq 0 ]; then
+                            action_with_spinner_and_output "Installing GitHub CLI" yum install -y gh
+                        else
+                            info "Sudo access is required to install GitHub CLI. You may be prompted for your password."
+                            if ! action_with_spinner_and_output "Installing GitHub CLI" sudo yum install -y gh; then
+                                error "Installation failed. If you were prompted for a password, please run: sudo fit setup"
+                                error "Or install GitHub CLI manually: https://cli.github.com/"
+                                exit 1
+                            fi
+                        fi
+                        hash -r
+                        if ! command -v gh >/dev/null 2>&1 && [ -f /usr/bin/gh ]; then
+                            export PATH="/usr/bin:$PATH"
+                        fi
+                    else
+                        error "Could not detect package manager. Please install GitHub CLI manually: https://cli.github.com/"
+                        exit 1
+                    fi
+                    
+                    if ! command -v gh >/dev/null 2>&1; then
+                        error "GitHub CLI was installed but cannot be found. Please restart your terminal and run 'fit setup' again."
+                        exit 1
+                    fi
+                fi
+                
+                if gh auth status >/dev/null 2>&1; then
+                    info "GitHub is already authenticated."
+                    USE_GITHUB="true"
+                else
+                    info "Logging in to GitHub..."
+                    if gh auth login; then
+                        USE_GITHUB="true"
+                        info "GitHub authentication successful."
+                    else
+                        error "GitHub authentication failed."
+                        USE_GITHUB="false"
+                    fi
+                fi
+                
+                if ! grep -q "^USE_GITHUB=" "$CONFIG_FILE" 2>/dev/null; then
+                    echo "USE_GITHUB=\"$USE_GITHUB\"" >> "$CONFIG_FILE"
+                else
+                    sed -i "s|^USE_GITHUB=.*|USE_GITHUB=\"$USE_GITHUB\"|" "$CONFIG_FILE"
+                fi
+                
+                action "Setting Up GitHub"
+            else
+                USE_GITHUB="false"
+                if ! grep -q "^USE_GITHUB=" "$CONFIG_FILE" 2>/dev/null; then
+                    echo "USE_GITHUB=\"false\"" >> "$CONFIG_FILE"
+                else
+                    sed -i "s|^USE_GITHUB=.*|USE_GITHUB=\"false\"|" "$CONFIG_FILE"
+                fi
+                info "GitHub integration skipped."
+            fi
+        else
+            if ! command -v gh >/dev/null 2>&1; then
+                error "GitHub CLI (gh) is not installed."
+                exit 1
+            fi
+            
+            if gh auth status >/dev/null 2>&1; then
+                info "GitHub is already connected."
+            else
+                info "GitHub was configured but authentication is missing. Re-authenticating..."
+                if gh auth login; then
+                    info "GitHub re-authentication successful."
+                else
+                    error "GitHub re-authentication failed. Run 'fit setup' again to fix."
+                fi
+            fi
         fi
         
         if [ ! -f "$ZSHRC" ]; then

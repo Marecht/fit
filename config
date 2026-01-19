@@ -1,3 +1,5 @@
+
 DEFAULT_BRANCH="master"
 GIT_USER_EMAIL="marechtcz@gmail.com"
-GIT_USER_NAME="Marecht"
+GIT_USER_NAME="Marek Klein"
+USE_GITHUB="true"
