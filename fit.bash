@@ -24,7 +24,7 @@ _fit() {
         use_github=$(echo "$USE_GITHUB" | tr -d '\r' | xargs)
     fi
     
-    local commands="rebase commit uncommit push log branch default-repository-branch new-branch stash stash-pop stash-apply stash-clear setup help"
+    local commands="rebase rebase-continue rebase-abort commit uncommit push log branch default-repository-branch new-branch stash stash-pop stash-apply stash-clear setup help"
     
     if [ "$use_github" = "true" ]; then
         commands="$commands gh-reviews gh-checks"
@@ -112,7 +112,7 @@ _fit() {
                         fi
                     fi
                     ;;
-                stash-pop|stash-apply|stash-clear|gh-reviews|gh-checks|log|setup|help)
+                stash-pop|stash-apply|stash-clear|rebase-continue|rebase-abort|gh-reviews|gh-checks|log|setup|help)
                     ;;
             esac
             ;;

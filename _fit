@@ -22,6 +22,8 @@ _fit() {
     local -a commands
     commands=(
         'rebase:sync and rebase onto a branch'
+        'rebase-continue:stage all changes and continue rebase'
+        'rebase-abort:abort in-progress rebase'
         'commit:create or amend a commit'
         'uncommit:remove last commit but keep changes'
         'push:commit, rebase, and force push'
@@ -120,7 +122,7 @@ _fit() {
                         fi
                     fi
                     ;;
-                uncommit|stash-pop|stash-apply|stash-clear|gh-reviews|gh-checks)
+                uncommit|stash-pop|stash-apply|stash-clear|rebase-continue|rebase-abort|gh-reviews|gh-checks)
                     ;;
             esac
             ;;

@@ -431,6 +431,27 @@ show_help() {
     echo -e "${INDENT}${INDENT}${GRAY}- git rebase origin/<branch>${RESET}"
     echo ""
     
+    echo -e "${CYAN}fit rebase-continue${RESET}"
+    echo -e "${INDENT}${GRAY}Stages all changes and continues an interrupted rebase.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- None${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git add -A${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git rebase --continue${RESET}"
+    echo -e "${INDENT}${GRAY}Note:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Only works when a rebase is in progress${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit rebase-abort${RESET}"
+    echo -e "${INDENT}${GRAY}Aborts an in-progress rebase and restores the branch to its state before the rebase started.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- None${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git rebase --abort${RESET}"
+    echo -e "${INDENT}${GRAY}Note:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Only works when a rebase is in progress${RESET}"
+    echo ""
+    
     echo -e "${CYAN}fit branch <branch-name>${RESET}"
     echo -e "${INDENT}${GRAY}Fetches all remotes and checks out the specified branch.${RESET}"
     echo -e "${INDENT}${GRAY}Parameters:${RESET}"
@@ -617,6 +638,35 @@ case "$COMMAND" in
     
     rebase)
         do_rebase "$ARG1"
+        ;;
+
+    rebase-continue)
+        if ! git rev-parse --git-dir >/dev/null 2>&1; then
+            error "ERROR: Not in a git repository!"
+            exit 1
+        fi
+        
+        if [ ! -d "$(git rev-parse --git-path rebase-merge)" ] && [ ! -d "$(git rev-parse --git-path rebase-apply)" ]; then
+            error "ERROR: No rebase in progress!"
+            exit 1
+        fi
+        
+        action_with_spinner "Staging All Changes" git add -A
+        action_with_spinner_and_output "Continuing Rebase" git rebase --continue
+        ;;
+
+    rebase-abort)
+        if ! git rev-parse --git-dir >/dev/null 2>&1; then
+            error "ERROR: Not in a git repository!"
+            exit 1
+        fi
+        
+        if [ ! -d "$(git rev-parse --git-path rebase-merge)" ] && [ ! -d "$(git rev-parse --git-path rebase-apply)" ]; then
+            error "ERROR: No rebase in progress!"
+            exit 1
+        fi
+        
+        action_with_spinner_and_output "Aborting Rebase" git rebase --abort
         ;;
 
     branch)
@@ -1394,7 +1444,7 @@ case "$COMMAND" in
         ;;
 
     *)
-        info "Usage: fit {rebase|commit|uncommit|push|log|branch|new-branch|setup|help} [arg] [-unsafe]"
+        info "Usage: fit {rebase|rebase-continue|rebase-abort|commit|uncommit|push|log|branch|new-branch|setup|help} [arg] [-unsafe]"
         info "Run 'fit help' for detailed information about all commands."
         ;;
 esac
