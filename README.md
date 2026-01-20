@@ -1,7 +1,6 @@
 # The fit git
 
-A terminal-based git workflow tool that provides a different interface for common git operations with safety checks, and simple automations.
-The goal is to minimise the need for a developer to think about git operations. This tool provides a consistent scalable workflow, which keeps everyone in sync, leaves a clean commit history and saves valuable "man seconds".  
+A terminal-based Git workflow tool that provides an intuitive interface for common operations, built-in safety checks, and simple automation. The goal is to minimize the cognitive load on developers regarding Git operations. By providing a consistent, scalable workflow, the tool keeps teams in sync, maintains a clean commit history, and saves valuable "man-seconds."
 
 ## Installation
 
