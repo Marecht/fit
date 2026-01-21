@@ -592,6 +592,35 @@ show_help() {
     echo -e "${INDENT}${INDENT}${GRAY}- git push --force --set-upstream origin <branch>${RESET}"
     echo ""
     
+    echo -e "${CYAN}fit temp [message]${RESET}"
+    echo -e "${INDENT}${GRAY}Creates temporary commits that can be squashed later with 'fit ship'.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- message (optional): Base message for a new temp commit stack. If omitted, adds to the existing temp commit stack.${RESET}"
+    echo -e "${INDENT}${GRAY}Behavior:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- With message: Creates a new temp commit stack. Prompts for additional temp commit message.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}  Format: [temp] <base-message> | <temp-message> (or [temp] <base-message> if temp message is empty)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Without message: Adds to existing temp commit stack if last commit is a temp commit.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}  If last commit is not a temp commit, stashes uncommitted changes, uncommits the last commit,${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}  recommits it as [temp] <previous-message>, then continues with normal temp logic.${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git add -A${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git commit -m \"[temp] <message>\" --allow-empty${RESET}"
+    echo ""
+    
+    echo -e "${CYAN}fit ship${RESET}"
+    echo -e "${INDENT}${GRAY}Squashes all temp commit stacks into single commits and pushes.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- None${RESET}"
+    echo -e "${INDENT}${GRAY}Behavior:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Identifies all temp commit stacks (consecutive temp commits with the same base message)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Squashes each stack into a single commit with just the base message${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Preserves non-temp commits as-is${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Executes fit push after squashing${RESET}"
+    echo -e "${INDENT}${GRAY}Commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- fit rebase${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git push --force --set-upstream origin <branch>${RESET}"
+    echo ""
+    
     echo -e "${CYAN}fit setup${RESET}"
     echo -e "${INDENT}${GRAY}Configures git identity, default branch, shell completion, and creates command aliases.${RESET}"
     echo -e "${INDENT}${GRAY}Parameters:${RESET}"
@@ -987,6 +1016,235 @@ case "$COMMAND" in
         check_origin
         action_with_spinner_and_output "Removing Last Commit (soft reset)" git reset --soft HEAD~1
         info "Last commit removed. Changes are preserved in staging area."
+        ;;
+
+    temp)
+        check_git_identity
+        
+        if ! git rev-parse --git-dir >/dev/null 2>&1; then
+            error "ERROR: Not in a git repository!"
+            exit 1
+        fi
+        
+        if [ -n "$ARG1" ]; then
+            base_message="$ARG1"
+            echo -e "${TEAL}Enter Temp commit message:${RESET} "
+            read -r temp_message < /dev/tty
+            
+            if [ -n "$temp_message" ] && [ -n "$(echo "$temp_message" | tr -d '[:space:]')" ]; then
+                commit_message="[temp] $base_message | $temp_message"
+            else
+                commit_message="[temp] $base_message"
+            fi
+            
+            action_with_spinner "Staging All Changes" git add -A
+            action_with_spinner_and_output "Creating Temp Commit" git commit -m "$commit_message" --allow-empty
+        else
+            last_commit_message=$(git log -1 --format="%s" HEAD 2>/dev/null)
+            
+            if [ -z "$last_commit_message" ]; then
+                error "ERROR: No commits found in repository!"
+                exit 1
+            fi
+            
+            if echo "$last_commit_message" | grep -q "^\[temp\]"; then
+                base_message=$(echo "$last_commit_message" | sed 's/^\[temp\] //' | sed 's/ | .*$//')
+                echo -e "${TEAL}Enter Temp commit message:${RESET} "
+                read -r temp_message < /dev/tty
+                
+                if [ -n "$temp_message" ] && [ -n "$(echo "$temp_message" | tr -d '[:space:]')" ]; then
+                    commit_message="[temp] $base_message | $temp_message"
+                else
+                    commit_message="[temp] $base_message"
+                fi
+                
+                action_with_spinner "Staging All Changes" git add -A
+                action_with_spinner_and_output "Creating Temp Commit" git commit -m "$commit_message" --allow-empty
+            else
+                default_branch=$(get_default_branch)
+                action_with_spinner "Checking origin/$default_branch" git fetch --all --prune >/dev/null 2>&1
+                
+                origin_ref="origin/$default_branch"
+                if git rev-parse --verify "$origin_ref" >/dev/null 2>&1; then
+                    local_commit=$(git rev-parse HEAD 2>/dev/null)
+                    origin_commit=$(git rev-parse "$origin_ref" 2>/dev/null)
+                    
+                    if [ -n "$local_commit" ] && [ -n "$origin_commit" ]; then
+                        if git merge-base --is-ancestor "$origin_commit" "$local_commit" 2>/dev/null; then
+                            ahead=$(git rev-list --count "$origin_commit".."$local_commit" 2>/dev/null)
+                            if [ "$ahead" -eq 0 ]; then
+                                error "Cannot create a temp commit from \"$last_commit_message\" - it doesn't belong to this branch. Create a new temp stack with \"fit temp \\\"Your commit message\\\"\""
+                                exit 1
+                            fi
+                        fi
+                    fi
+                fi
+                
+                check_origin
+                
+                error "Last commit is not a temp commit. Create a new temp stack with \"fit temp \\\"Your commit message\\\"\""
+                exit 1
+            fi
+        fi
+        ;;
+
+    ship)
+        check_git_identity
+        
+        if ! git rev-parse --git-dir >/dev/null 2>&1; then
+            error "ERROR: Not in a git repository!"
+            exit 1
+        fi
+        
+        action_with_spinner "Staging All Changes" git add -A
+        
+        if [ -n "$(git status --porcelain)" ]; then
+            action_with_spinner_and_output "Committing Uncommitted Changes" git commit -m "[temp] Uncommitted changes" --allow-empty
+        fi
+        
+        default_branch=$(get_default_branch)
+        action_with_spinner "Fetching origin/$default_branch" git fetch origin "$default_branch" --prune >/dev/null 2>&1
+        
+        origin_ref="origin/$default_branch"
+        if git rev-parse --verify "$origin_ref" >/dev/null 2>&1; then
+            base_commit=$(git merge-base HEAD "$origin_ref" 2>/dev/null)
+        else
+            base_commit=$(git rev-list --max-count=1 HEAD~$(git rev-list --count HEAD 2>/dev/null || echo "0") 2>/dev/null)
+            if [ -z "$base_commit" ]; then
+                base_commit=""
+            fi
+        fi
+        
+        if [ -z "$base_commit" ]; then
+            temp_file=$(mktemp)
+            git log --format="%H|%s" --reverse HEAD > "$temp_file"
+        else
+            temp_file=$(mktemp)
+            git log --format="%H|%s" --reverse "$base_commit"..HEAD > "$temp_file"
+        fi
+        
+        if [ ! -s "$temp_file" ]; then
+            error "ERROR: No commits found in current branch!"
+            rm -f "$temp_file"
+            exit 1
+        fi
+        
+        has_temp_commits=false
+        while IFS='|' read -r commit_hash commit_msg; do
+            if echo "$commit_msg" | grep -q "^\[temp\]"; then
+                has_temp_commits=true
+                break
+            fi
+        done < "$temp_file"
+        
+        if [ "$has_temp_commits" = "false" ]; then
+            info "No temp commits found. Proceeding with push."
+            rm -f "$temp_file"
+            do_rebase
+            if [ $? -eq 0 ]; then
+                current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+                if [ -n "$current_branch" ]; then
+                    action_with_spinner_and_output "Force Pushing" git push --force --set-upstream origin "$current_branch"
+                else
+                    action_with_spinner_and_output "Force Pushing" git push --force
+                fi
+            else
+                error "ERROR: Conflicts detected during rebase! Push aborted. Please resolve conflicts and push manually."
+                exit 1
+            fi
+            exit 0
+        fi
+        
+        if [ -z "$base_commit" ]; then
+            empty_tree=$(git hash-object -t tree /dev/null 2>/dev/null || git mktree < /dev/null 2>/dev/null || echo "")
+            if [ -n "$empty_tree" ]; then
+                action_with_spinner_and_output "Resetting to Empty" git read-tree "$empty_tree"
+                git clean -fd >/dev/null 2>&1 || true
+            else
+                action_with_spinner_and_output "Resetting to Empty" git rm -rf . >/dev/null 2>&1 || true
+            fi
+        else
+            action_with_spinner_and_output "Resetting to Base" git reset --hard "$base_commit"
+        fi
+        
+        current_base=""
+        last_temp_commit_hash=""
+        
+        exec 3< "$temp_file"
+        while IFS='|' read -r commit_hash commit_msg <&3; do
+            if [ -z "$commit_hash" ] || [ -z "$commit_msg" ]; then
+                continue
+            fi
+            
+            if echo "$commit_msg" | grep -q "^\[temp\]"; then
+                base=$(echo "$commit_msg" | sed 's/^\[temp\] //' | sed 's/ | .*$//')
+                
+                if [ -z "$current_base" ]; then
+                    current_base="$base"
+                    last_temp_commit_hash="$commit_hash"
+                elif [ "$current_base" != "$base" ]; then
+                    if [ -n "$current_base" ] && [ -n "$last_temp_commit_hash" ]; then
+                        tree_hash=$(git rev-parse "$last_temp_commit_hash^{tree}" 2>/dev/null)
+                        if [ -n "$tree_hash" ]; then
+                            action_with_spinner_and_output "Applying Commit" git read-tree "$tree_hash" >/dev/null 2>&1
+                            git checkout-index -f -a >/dev/null 2>&1 || true
+                        fi
+                        action_with_spinner "Staging All Changes" git add -A
+                        action_with_spinner_and_output "Creating Squashed Commit" git commit -m "$current_base" --allow-empty
+                    fi
+                    current_base="$base"
+                    last_temp_commit_hash="$commit_hash"
+                else
+                    last_temp_commit_hash="$commit_hash"
+                fi
+            else
+                if [ -n "$current_base" ] && [ -n "$last_temp_commit_hash" ]; then
+                    tree_hash=$(git rev-parse "$last_temp_commit_hash^{tree}" 2>/dev/null)
+                    if [ -n "$tree_hash" ]; then
+                        action_with_spinner_and_output "Applying Commit" git read-tree "$tree_hash" >/dev/null 2>&1
+                        git checkout-index -f -a >/dev/null 2>&1 || true
+                    fi
+                    action_with_spinner "Staging All Changes" git add -A
+                    action_with_spinner_and_output "Creating Squashed Commit" git commit -m "$current_base" --allow-empty
+                    current_base=""
+                    last_temp_commit_hash=""
+                fi
+                
+                tree_hash=$(git rev-parse "$commit_hash^{tree}" 2>/dev/null)
+                if [ -n "$tree_hash" ]; then
+                    action_with_spinner_and_output "Applying Commit" git read-tree "$tree_hash" >/dev/null 2>&1
+                    git checkout-index -f -a >/dev/null 2>&1 || true
+                fi
+                action_with_spinner "Staging All Changes" git add -A
+                action_with_spinner_and_output "Recreating Commit" git commit -m "$commit_msg" --allow-empty
+            fi
+        done
+        exec 3<&-
+        
+        if [ -n "$current_base" ] && [ -n "$last_temp_commit_hash" ]; then
+            tree_hash=$(git rev-parse "$last_temp_commit_hash^{tree}" 2>/dev/null)
+            if [ -n "$tree_hash" ]; then
+                action_with_spinner_and_output "Applying Commit" git read-tree "$tree_hash" >/dev/null 2>&1
+                git checkout-index -f -a >/dev/null 2>&1 || true
+            fi
+            action_with_spinner "Staging All Changes" git add -A
+            action_with_spinner_and_output "Creating Squashed Commit" git commit -m "$current_base" --allow-empty
+        fi
+        
+        rm -f "$temp_file"
+        
+        do_rebase
+        if [ $? -eq 0 ]; then
+            current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+            if [ -n "$current_branch" ]; then
+                action_with_spinner_and_output "Force Pushing" git push --force --set-upstream origin "$current_branch"
+            else
+                action_with_spinner_and_output "Force Pushing" git push --force
+            fi
+        else
+            error "ERROR: Conflicts detected during rebase! Push aborted. Please resolve conflicts and push manually."
+            exit 1
+        fi
         ;;
 
     push)
@@ -1444,7 +1702,7 @@ case "$COMMAND" in
         ;;
 
     *)
-        info "Usage: fit {rebase|rebase-continue|rebase-abort|commit|uncommit|push|log|branch|new-branch|setup|help} [arg] [-unsafe]"
+        info "Usage: fit {rebase|rebase-continue|rebase-abort|commit|uncommit|push|temp|ship|log|branch|new-branch|setup|help} [arg] [-unsafe]"
         info "Run 'fit help' for detailed information about all commands."
         ;;
 esac
