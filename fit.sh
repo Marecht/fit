@@ -104,6 +104,123 @@ info() {
     echo -e "${INDENT}${INDENT}${GRAY}- $1${RESET}"
 }
 
+install_homebrew() {
+    info "Installing Homebrew..."
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    else
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    fi
+    
+    local brew_path=""
+    if [[ "$OSTYPE" == "linux"* ]]; then
+        if [ -d "/home/linuxbrew/.linuxbrew" ]; then
+            eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+            brew_path="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin"
+        elif [ -d "$HOME/.linuxbrew" ]; then
+            eval "$($HOME/.linuxbrew/bin/brew shellenv)"
+            brew_path="$HOME/.linuxbrew/bin:$HOME/.linuxbrew/sbin"
+        fi
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        if [ -d "/opt/homebrew" ]; then
+            brew_path="/opt/homebrew/bin:/opt/homebrew/sbin"
+        elif [ -d "/usr/local" ]; then
+            brew_path="/usr/local/bin:/usr/local/sbin"
+        fi
+    fi
+    
+    if [ -n "$brew_path" ]; then
+        export PATH="$brew_path:$PATH"
+        local shell_config=""
+        if [ -f "$HOME/.zshrc" ]; then
+            shell_config="$HOME/.zshrc"
+        elif [ -f "$HOME/.bashrc" ]; then
+            shell_config="$HOME/.bashrc"
+        elif [ -f "$HOME/.bash_profile" ]; then
+            shell_config="$HOME/.bash_profile"
+        fi
+        
+        if [ -n "$shell_config" ] && ! grep -q "Homebrew" "$shell_config"; then
+            echo "" >> "$shell_config"
+            echo "# Homebrew PATH" >> "$shell_config"
+            if [[ "$OSTYPE" == "linux"* ]]; then
+                if [ -d "/home/linuxbrew/.linuxbrew" ]; then
+                    echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> "$shell_config"
+                elif [ -d "$HOME/.linuxbrew" ]; then
+                    echo 'eval "$($HOME/.linuxbrew/bin/brew shellenv)"' >> "$shell_config"
+                fi
+            elif [[ "$OSTYPE" == "darwin"* ]]; then
+                if [ -d "/opt/homebrew" ]; then
+                    echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$shell_config"
+                elif [ -d "/usr/local" ]; then
+                    echo 'eval "$(/usr/local/bin/brew shellenv)"' >> "$shell_config"
+                fi
+            fi
+        fi
+    fi
+    
+    hash -r
+    if command -v brew >/dev/null 2>&1; then
+        info "Homebrew installed successfully."
+        return 0
+    else
+        error "Homebrew installation failed. Please install it manually."
+        return 1
+    fi
+}
+
+install_go() {
+    info "Installing Go..."
+    
+    if command -v brew >/dev/null 2>&1; then
+        action_with_spinner "Installing Go via Homebrew" brew install go
+        hash -r
+        if command -v go >/dev/null 2>&1; then
+            info "Go installed successfully via Homebrew."
+            return 0
+        fi
+    fi
+    
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        error "Go installation via Homebrew failed. Please install Go manually:"
+        error "  brew install go"
+        return 1
+    elif [[ "$OSTYPE" == "linux"* ]]; then
+        if command -v apt-get >/dev/null 2>&1; then
+            info "Installing Go via apt-get..."
+            if [ "$EUID" -ne 0 ]; then
+                action_with_spinner "Installing Go" sudo apt-get update && sudo apt-get install -y golang-go
+            else
+                action_with_spinner "Installing Go" apt-get update && apt-get install -y golang-go
+            fi
+            hash -r
+            if command -v go >/dev/null 2>&1; then
+                info "Go installed successfully via apt-get."
+                return 0
+            fi
+        elif command -v yum >/dev/null 2>&1; then
+            info "Installing Go via yum..."
+            if [ "$EUID" -ne 0 ]; then
+                action_with_spinner "Installing Go" sudo yum install -y golang
+            else
+                action_with_spinner "Installing Go" yum install -y golang
+            fi
+            hash -r
+            if command -v go >/dev/null 2>&1; then
+                info "Go installed successfully via yum."
+                return 0
+            fi
+        fi
+        
+        error "Go installation via package manager failed. Please install Go manually:"
+        error "  Download from: https://go.dev/dl/"
+        return 1
+    else
+        error "Unsupported OS. Please install Go manually from: https://go.dev/dl/"
+        return 1
+    fi
+}
+
 # Git command wrapper to color output gray
 run_git() {
     local temp_file=$(mktemp)
@@ -160,6 +277,7 @@ DEFAULT_BRANCH=$(echo "$DEFAULT_BRANCH" | tr -d '\r' | xargs)
 GIT_USER_EMAIL=$(echo "$GIT_USER_EMAIL" | tr -d '\r' | xargs)
 GIT_USER_NAME=$(echo "$GIT_USER_NAME" | tr -d '\r' | xargs)
 USE_GITHUB=$(echo "$USE_GITHUB" | tr -d '\r' | xargs)
+PROJECT_MANAGER=$(echo "$PROJECT_MANAGER" | tr -d '\r' | xargs)
 
 # Helper function to get repository identifier from git remote URL
 get_repo_id() {
@@ -757,8 +875,40 @@ case "$COMMAND" in
         
         check_git_identity
         
+        commit_message_input="$ARG2"
+        jira_issue_key=""
+        
+        if [ "$PROJECT_MANAGER" = "jira" ] && command -v jira >/dev/null 2>&1; then
+            if echo "$commit_message_input" | grep -qE '^[A-Z]+-[0-9]+(:.*)?$'; then
+                jira_issue_key=$(echo "$commit_message_input" | sed 's/:.*$//' | awk '{print $1}')
+                
+                if [ -z "$TASK_ID" ]; then
+                    TASK_ID="$jira_issue_key"
+                fi
+                
+                if echo "$commit_message_input" | grep -q ':'; then
+                    commit_message_input=$(echo "$commit_message_input" | sed 's/^[^:]*:[[:space:]]*//')
+                    if [ -z "$commit_message_input" ]; then
+                        action_with_spinner "Fetching Jira Issue" jira issue view "$jira_issue_key" --columns summary --no-headers > /tmp/fit_jira_issue.txt 2>&1
+                        if [ $? -eq 0 ] && [ -s /tmp/fit_jira_issue.txt ]; then
+                            commit_message_input=$(cat /tmp/fit_jira_issue.txt | head -1 | xargs)
+                            info "Using Jira issue summary: $commit_message_input"
+                        fi
+                        rm -f /tmp/fit_jira_issue.txt
+                    fi
+                else
+                    action_with_spinner "Fetching Jira Issue" jira issue view "$jira_issue_key" --columns summary --no-headers > /tmp/fit_jira_issue.txt 2>&1
+                    if [ $? -eq 0 ] && [ -s /tmp/fit_jira_issue.txt ]; then
+                        commit_message_input=$(cat /tmp/fit_jira_issue.txt | head -1 | xargs)
+                        info "Using Jira issue summary: $commit_message_input"
+                    fi
+                    rm -f /tmp/fit_jira_issue.txt
+                fi
+            fi
+        fi
+        
         # Format branch name
-        formatted_commit=$(format_commit_for_branch "$ARG2")
+        formatted_commit=$(format_commit_for_branch "$commit_message_input")
         if [ -n "$TASK_ID" ]; then
             branch_name="${TASK_ID}_${ARG1}-${formatted_commit}"
         else
@@ -767,7 +917,7 @@ case "$COMMAND" in
         
         # Format commit message
         past_tense=$(get_past_tense "$ARG1")
-        commit_message="${past_tense} $ARG2"
+        commit_message="${past_tense} $commit_message_input"
         
         # Create and checkout new branch
         action_with_spinner_and_output "Creating New Branch" git checkout -b "$branch_name"
@@ -1285,6 +1435,7 @@ case "$COMMAND" in
         GIT_USER_EMAIL=$(echo "$GIT_USER_EMAIL" | tr -d '\r' | xargs)
         GIT_USER_NAME=$(echo "$GIT_USER_NAME" | tr -d '\r' | xargs)
         USE_GITHUB=$(echo "$USE_GITHUB" | tr -d '\r' | xargs)
+        PROJECT_MANAGER=$(echo "$PROJECT_MANAGER" | tr -d '\r' | xargs)
         
         if [ -z "$DEFAULT_BRANCH" ]; then
             echo ""
@@ -1500,6 +1651,724 @@ case "$COMMAND" in
             fi
         fi
         
+        if [ -z "$PROJECT_MANAGER" ] || [ "$PROJECT_MANAGER" != "jira" ] && [ "$PROJECT_MANAGER" != "none" ]; then
+            echo ""
+            echo -e "${INDENT}${TEAL}Setting Up Project Manager${RESET}"
+            echo "Select a project manager:"
+            echo "1) Jira"
+            echo "2) None"
+            read -p "Enter your choice (1 or 2): " pm_choice
+            
+            case "$pm_choice" in
+                1)
+                    PROJECT_MANAGER="jira"
+                    ;;
+                2|*)
+                    PROJECT_MANAGER="none"
+                    ;;
+            esac
+            
+            if ! grep -q "^PROJECT_MANAGER=" "$CONFIG_FILE" 2>/dev/null; then
+                echo "PROJECT_MANAGER=\"$PROJECT_MANAGER\"" >> "$CONFIG_FILE"
+            else
+                sed_in_place "$CONFIG_FILE" "s|^PROJECT_MANAGER=.*|PROJECT_MANAGER=\"$PROJECT_MANAGER\"|"
+            fi
+            info "Project manager saved to config."
+            action "Setting Up Project Manager"
+        else
+            info "Project manager already configured: $PROJECT_MANAGER"
+        fi
+        
+        if [ "$PROJECT_MANAGER" = "jira" ]; then
+            echo ""
+            echo -e "${INDENT}${TEAL}Setting Up Jira${RESET}"
+            
+            jira_cli_type=""
+            if command -v jira >/dev/null 2>&1; then
+                if jira issue list --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "issue list"; then
+                    jira_cli_type="new"
+                    info "New Jira CLI (ankitpokhrel/jira-cli) is installed."
+                elif jira ls --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "list.*Prints list of issues"; then
+                    jira_cli_type="old"
+                    info "Old Jira CLI (go-jira/jira) detected. It doesn't support API v3."
+                    info "Installing new Jira CLI..."
+                    
+                    if command -v go >/dev/null 2>&1; then
+                        info "Installing new Jira CLI via Go..."
+                        action_with_spinner "Installing new Jira CLI via Go" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                        hash -r
+                        
+                        if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                            export PATH="$HOME/go/bin:$PATH"
+                            if [ -f "$ZSHRC" ]; then
+                                if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                    echo "" >> "$ZSHRC"
+                                    echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                fi
+                            elif [ -f "$HOME/.bashrc" ]; then
+                                if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                    echo "" >> "$HOME/.bashrc"
+                                    echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                fi
+                            fi
+                            
+                            if command -v jira >/dev/null 2>&1 && (jira issue list --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "issue list"); then
+                                jira_cli_type="new"
+                                info "New Jira CLI installed successfully via Go."
+                            fi
+                        fi
+                    elif command -v go >/dev/null 2>&1; then
+                        action_with_spinner "Installing new Jira CLI via Go" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                        hash -r
+                        
+                        if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                            export PATH="$HOME/go/bin:$PATH"
+                            if [ -f "$ZSHRC" ]; then
+                                if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                    echo "" >> "$ZSHRC"
+                                    echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                fi
+                            elif [ -f "$HOME/.bashrc" ]; then
+                                if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                    echo "" >> "$HOME/.bashrc"
+                                    echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                fi
+                            fi
+                            
+                            if command -v jira >/dev/null 2>&1 && (jira issue list --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "issue list"); then
+                                jira_cli_type="new"
+                                info "New Jira CLI installed successfully via Go."
+                            fi
+                        fi
+                    else
+                        echo ""
+                        echo -e "${TEAL}Neither Homebrew nor Go is installed.${RESET}"
+                        echo -e "${TEAL}Which would you like to install?${RESET}"
+                        echo ""
+                        echo "1) Homebrew (recommended)"
+                        echo "2) Go"
+                        echo ""
+                        echo -e "${TEAL}Enter your choice (1 or 2):${RESET} "
+                        read -r choice < /dev/tty
+                        
+                        case "$choice" in
+                            1)
+                                if install_homebrew; then
+                                    if command -v go >/dev/null 2>&1; then
+                                        info "Installing new Jira CLI via Go..."
+                                        action_with_spinner "Installing new Jira CLI via Go" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                                        hash -r
+                                        
+                                        if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                                            export PATH="$HOME/go/bin:$PATH"
+                                            if [ -f "$ZSHRC" ]; then
+                                                if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                                    echo "" >> "$ZSHRC"
+                                                    echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                                fi
+                                            elif [ -f "$HOME/.bashrc" ]; then
+                                                if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                                    echo "" >> "$HOME/.bashrc"
+                                                    echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                                fi
+                                            fi
+                                            
+                                            if command -v jira >/dev/null 2>&1 && (jira issue list --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "issue list"); then
+                                                jira_cli_type="new"
+                                                info "New Jira CLI installed successfully via Go."
+                                            fi
+                                        fi
+                                    else
+                                        if install_go; then
+                                            info "Installing new Jira CLI via Go..."
+                                            action_with_spinner "Installing new Jira CLI via Go" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                                            hash -r
+                                            
+                                            if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                                                export PATH="$HOME/go/bin:$PATH"
+                                                if [ -f "$ZSHRC" ]; then
+                                                    if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                                        echo "" >> "$ZSHRC"
+                                                        echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                                        echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                                    fi
+                                                elif [ -f "$HOME/.bashrc" ]; then
+                                                    if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                                        echo "" >> "$HOME/.bashrc"
+                                                        echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                                        echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                                    fi
+                                                fi
+                                                
+                                                if command -v jira >/dev/null 2>&1 && (jira issue list --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "issue list"); then
+                                                    jira_cli_type="new"
+                                                    info "New Jira CLI installed successfully via Go."
+                                                fi
+                                            fi
+                                        else
+                                            error "Failed to install Go. Please install it manually and run 'fit setup' again."
+                                            exit 1
+                                        fi
+                                    fi
+                                else
+                                    error "Failed to install Homebrew. Please install it manually and run 'fit setup' again."
+                                    exit 1
+                                fi
+                                ;;
+                            2)
+                                if install_go; then
+                                    info "Installing new Jira CLI via Go..."
+                                    action_with_spinner "Installing new Jira CLI via Go" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                                    hash -r
+                                    
+                                    if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                                        export PATH="$HOME/go/bin:$PATH"
+                                        if [ -f "$ZSHRC" ]; then
+                                            if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                                echo "" >> "$ZSHRC"
+                                                echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                                echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                            fi
+                                        elif [ -f "$HOME/.bashrc" ]; then
+                                            if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                                echo "" >> "$HOME/.bashrc"
+                                                echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                                echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                            fi
+                                        fi
+                                        
+                                        if command -v jira >/dev/null 2>&1 && (jira issue list --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "issue list"); then
+                                            jira_cli_type="new"
+                                            info "New Jira CLI installed successfully via Go."
+                                        fi
+                                    fi
+                                else
+                                    error "Failed to install Go. Please install it manually and run 'fit setup' again."
+                                    exit 1
+                                fi
+                                ;;
+                            *)
+                                error "Invalid choice. Please run 'fit setup' again."
+                                exit 1
+                                ;;
+                        esac
+                    fi
+                else
+                    info "Jira CLI is installed but type is unknown."
+                fi
+            else
+                info "Jira CLI not found. Installing..."
+                
+                if command -v go >/dev/null 2>&1; then
+                    info "Installing jira-cli via Go..."
+                    action_with_spinner "Installing Jira CLI" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                    hash -r
+                    
+                    if ! command -v jira >/dev/null 2>&1; then
+                        if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                            export PATH="$HOME/go/bin:$PATH"
+                            if [ -f "$ZSHRC" ]; then
+                                if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                    echo "" >> "$ZSHRC"
+                                    echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                fi
+                            elif [ -f "$HOME/.bashrc" ]; then
+                                if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                    echo "" >> "$HOME/.bashrc"
+                                    echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                fi
+                            fi
+                        fi
+                    fi
+                elif command -v go >/dev/null 2>&1; then
+                    info "Homebrew not found. Installing jira-cli via Go..."
+                    action_with_spinner "Installing Jira CLI" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                    hash -r
+                    
+                    if ! command -v jira >/dev/null 2>&1; then
+                        if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                            export PATH="$HOME/go/bin:$PATH"
+                            if [ -f "$ZSHRC" ]; then
+                                if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                    echo "" >> "$ZSHRC"
+                                    echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                fi
+                            elif [ -f "$HOME/.bashrc" ]; then
+                                if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                    echo "" >> "$HOME/.bashrc"
+                                    echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                fi
+                            fi
+                        fi
+                    fi
+                else
+                    echo ""
+                    echo -e "${TEAL}Neither Homebrew nor Go is installed.${RESET}"
+                    echo -e "${TEAL}Which would you like to install?${RESET}"
+                    echo ""
+                    echo "1) Homebrew (recommended)"
+                    echo "2) Go"
+                    echo ""
+                    echo -e "${TEAL}Enter your choice (1 or 2):${RESET} "
+                    read -r choice < /dev/tty
+                    
+                    case "$choice" in
+                        1)
+                            if install_homebrew; then
+                                if command -v go >/dev/null 2>&1; then
+                                    info "Installing jira-cli via Go..."
+                                    action_with_spinner "Installing Jira CLI" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                                    hash -r
+                                    
+                                    if ! command -v jira >/dev/null 2>&1; then
+                                        if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                                            export PATH="$HOME/go/bin:$PATH"
+                                            if [ -f "$ZSHRC" ]; then
+                                                if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                                    echo "" >> "$ZSHRC"
+                                                    echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                                fi
+                                            elif [ -f "$HOME/.bashrc" ]; then
+                                                if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                                    echo "" >> "$HOME/.bashrc"
+                                                    echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                                    echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                                fi
+                                            fi
+                                        fi
+                                    fi
+                                else
+                                    if install_go; then
+                                        info "Installing jira-cli via Go..."
+                                        action_with_spinner "Installing Jira CLI" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                                        hash -r
+                                        
+                                        if ! command -v jira >/dev/null 2>&1; then
+                                            if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                                                export PATH="$HOME/go/bin:$PATH"
+                                                if [ -f "$ZSHRC" ]; then
+                                                    if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                                        echo "" >> "$ZSHRC"
+                                                        echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                                        echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                                    fi
+                                                elif [ -f "$HOME/.bashrc" ]; then
+                                                    if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                                        echo "" >> "$HOME/.bashrc"
+                                                        echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                                        echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                                    fi
+                                                fi
+                                            fi
+                                        fi
+                                    else
+                                        error "Failed to install Go. Please install it manually and run 'fit setup' again."
+                                        exit 1
+                                    fi
+                                fi
+                            else
+                                error "Failed to install Homebrew. Please install it manually and run 'fit setup' again."
+                                exit 1
+                            fi
+                            ;;
+                        2)
+                            if install_go; then
+                                info "Installing jira-cli via Go..."
+                                action_with_spinner "Installing Jira CLI" go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest
+                                hash -r
+                                
+                                if ! command -v jira >/dev/null 2>&1; then
+                                    if [ -d "$HOME/go/bin" ] && [ -f "$HOME/go/bin/jira" ]; then
+                                        export PATH="$HOME/go/bin:$PATH"
+                                        if [ -f "$ZSHRC" ]; then
+                                            if ! grep -q "export PATH.*go/bin" "$ZSHRC"; then
+                                                echo "" >> "$ZSHRC"
+                                                echo "# Go bin directory (for jira-cli)" >> "$ZSHRC"
+                                                echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$ZSHRC"
+                                            fi
+                                        elif [ -f "$HOME/.bashrc" ]; then
+                                            if ! grep -q "export PATH.*go/bin" "$HOME/.bashrc"; then
+                                                echo "" >> "$HOME/.bashrc"
+                                                echo "# Go bin directory (for jira-cli)" >> "$HOME/.bashrc"
+                                                echo "export PATH=\"\$HOME/go/bin:\$PATH\"" >> "$HOME/.bashrc"
+                                            fi
+                                        fi
+                                    fi
+                                fi
+                            else
+                                error "Failed to install Go. Please install it manually and run 'fit setup' again."
+                                exit 1
+                            fi
+                            ;;
+                        *)
+                            error "Invalid choice. Please run 'fit setup' again."
+                            exit 1
+                            ;;
+                    esac
+                fi
+                
+                if ! command -v jira >/dev/null 2>&1; then
+                    error "Jira CLI was installed but cannot be found."
+                    error "Please restart your terminal and run 'fit setup' again."
+                    if [ -d "$HOME/go/bin" ]; then
+                        error "Or add Go bin to your PATH: export PATH=\"\$HOME/go/bin:\$PATH\""
+                    fi
+                    exit 1
+                fi
+            fi
+            
+            if command -v jira >/dev/null 2>&1; then
+                if jira issue list --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "issue list"; then
+                    info "New Jira CLI (ankitpokhrel/jira-cli) is installed and ready."
+                elif jira ls --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "list.*Prints list of issues"; then
+                    error "WARNING: Old Jira CLI (go-jira/jira) is installed. It doesn't support Jira API v3."
+                    error ""
+                    error "To fix this:"
+                    error "  1. Install Go: brew install go (or your system's package manager)"
+                    error "  2. Install new CLI: go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest"
+                    error "  3. Make sure \$HOME/go/bin is in your PATH (before /usr/local/bin)"
+                    error "  4. Restart your terminal or run: export PATH=\"\$HOME/go/bin:\$PATH\""
+                    error "  5. Run 'fit setup' again"
+                    error ""
+                    error "The old CLI will not work with current Jira instances."
+                fi
+            fi
+            
+            JIRA_CONFIG_DIR="$HOME/.config/.jira"
+            JIRA_CONFIG_FILE="$JIRA_CONFIG_DIR/.config.yml"
+            OLD_JIRA_CONFIG="$HOME/.jira.d/config.yml"
+            WRONG_CONFIG_FILE="$HOME/.config/jira/config.yaml"
+            
+            if [ -f "$WRONG_CONFIG_FILE" ] && [ ! -f "$JIRA_CONFIG_FILE" ]; then
+                info "Found config in old location. Migrating to correct location..."
+                mkdir -p "$JIRA_CONFIG_DIR"
+                cp "$WRONG_CONFIG_FILE" "$JIRA_CONFIG_FILE" 2>/dev/null
+                chmod 600 "$JIRA_CONFIG_FILE"
+                rm -f "$WRONG_CONFIG_FILE"
+                info "Migrated config to correct location."
+            fi
+            
+            if [ -f "$OLD_JIRA_CONFIG" ] && [ ! -f "$JIRA_CONFIG_FILE" ]; then
+                info "Found old Jira config. Migrating to new format..."
+                if [ -f "$OLD_JIRA_CONFIG" ]; then
+                    old_endpoint=$(grep "^endpoint:" "$OLD_JIRA_CONFIG" 2>/dev/null | sed 's/^endpoint:[[:space:]]*//' | tr -d '"' | tr -d "'")
+                    old_user=$(grep "^user:" "$OLD_JIRA_CONFIG" 2>/dev/null | sed 's/^user:[[:space:]]*//' | tr -d '"' | tr -d "'")
+                    old_password=$(grep "^password:" "$OLD_JIRA_CONFIG" 2>/dev/null | sed 's/^password:[[:space:]]*//' | tr -d '"' | tr -d "'")
+                    
+                    if [ -n "$old_endpoint" ] && [ -n "$old_user" ] && [ -n "$old_password" ]; then
+                        mkdir -p "$JIRA_CONFIG_DIR"
+                        cat > "$JIRA_CONFIG_FILE" << EOF
+installation:
+  type: cloud
+  baseURL: $old_endpoint
+  login: $old_user
+EOF
+                        chmod 600 "$JIRA_CONFIG_FILE"
+                        
+                        NETRC_FILE="$HOME/.netrc"
+                        jira_host=$(echo "$old_endpoint" | sed 's|^https\?://||' | sed 's|/.*$||')
+                        if [ -f "$NETRC_FILE" ]; then
+                            if grep -q "machine $jira_host" "$NETRC_FILE" 2>/dev/null; then
+                                sed_in_place "$NETRC_FILE" "/^machine $jira_host/,/^$/d"
+                            fi
+                        fi
+                        {
+                            echo ""
+                            echo "machine $jira_host"
+                            echo "login $old_user"
+                            echo "password $old_password"
+                        } >> "$NETRC_FILE"
+                        chmod 600 "$NETRC_FILE"
+                        info "Migrated old Jira config to new format."
+                    fi
+                fi
+            fi
+            
+            if [ ! -f "$JIRA_CONFIG_FILE" ]; then
+                mkdir -p "$JIRA_CONFIG_DIR"
+                echo ""
+                info "Configuring Jira connection..."
+                read -p "Enter your Jira server URL (e.g., https://yourcompany.atlassian.net): " jira_server
+                if [ -z "$jira_server" ]; then
+                    error "Error: Jira server URL is required."
+                    exit 1
+                fi
+                
+                read -p "Enter your Jira username/email: " jira_user
+                if [ -z "$jira_user" ]; then
+                    error "Error: Jira username is required."
+                    exit 1
+                fi
+                
+                echo ""
+                info "You can use either an API token or password for authentication."
+                read -p "Do you want to use an API token? (yes/no): " use_token
+                
+                if [ "$use_token" = "yes" ] || [ "$use_token" = "y" ]; then
+                    read -sp "Enter your Jira API token: " jira_token
+                    echo ""
+                    if [ -z "$jira_token" ]; then
+                        error "Error: Jira API token is required."
+                        exit 1
+                    fi
+                    jira_password="$jira_token"
+                else
+                    read -sp "Enter your Jira password: " jira_password
+                    echo ""
+                    if [ -z "$jira_password" ]; then
+                        error "Error: Jira password is required."
+                        exit 1
+                    fi
+                fi
+                
+                NETRC_FILE="$HOME/.netrc"
+                jira_host=$(echo "$jira_server" | sed 's|^https\?://||' | sed 's|/.*$||')
+                if [ -f "$NETRC_FILE" ]; then
+                    if grep -q "machine $jira_host" "$NETRC_FILE" 2>/dev/null; then
+                        sed_in_place "$NETRC_FILE" "/^machine $jira_host/,/^$/d"
+                    fi
+                fi
+                {
+                    echo ""
+                    echo "machine $jira_host"
+                    echo "login $jira_user"
+                    echo "password $jira_password"
+                } >> "$NETRC_FILE"
+                chmod 600 "$NETRC_FILE"
+                info "Jira API token saved to $NETRC_FILE"
+                
+                echo ""
+                info "Fetching available Jira projects..."
+                projects_json=$(curl -s -u "$jira_user:$jira_password" "$jira_server/rest/api/3/project" 2>&1)
+                if [ $? -eq 0 ] && [ -n "$projects_json" ] && ! echo "$projects_json" | grep -qi "error\|unauthorized\|invalid"; then
+                    if command -v jq >/dev/null 2>&1; then
+                        projects=()
+                        project_keys=()
+                        project_count=$(echo "$projects_json" | jq -r 'length' 2>/dev/null)
+                        if [ -n "$project_count" ] && [ "$project_count" != "null" ] && [ "$project_count" -gt 0 ] 2>/dev/null; then
+                            for i in $(seq 0 $((project_count-1))); do
+                                project_key=$(echo "$projects_json" | jq -r ".[$i].key" 2>/dev/null)
+                                project_name=$(echo "$projects_json" | jq -r ".[$i].name" 2>/dev/null)
+                                if [ -n "$project_key" ] && [ "$project_key" != "null" ]; then
+                                    projects+=("$project_key: $project_name")
+                                    project_keys+=("$project_key")
+                                fi
+                            done
+                        fi
+                    else
+                        projects=()
+                        project_keys=()
+                        while IFS= read -r line; do
+                            project_key=$(echo "$line" | grep -o '"key":"[^"]*"' | sed 's/"key":"\([^"]*\)"/\1/' | head -1)
+                            project_name=$(echo "$line" | grep -o '"name":"[^"]*"' | sed 's/"name":"\([^"]*\)"/\1/' | head -1)
+                            if [ -n "$project_key" ] && [ -n "$project_name" ]; then
+                                projects+=("$project_key: $project_name")
+                                project_keys+=("$project_key")
+                            fi
+                        done <<< "$projects_json"
+                    fi
+                    
+                    if [ ${#projects[@]} -gt 0 ]; then
+                        echo ""
+                        echo "Available projects:"
+                        for i in "${!projects[@]}"; do
+                            echo "$((i+1))) ${projects[$i]}"
+                        done
+                        echo ""
+                        read -p "Select a project (1-${#projects[@]}): " project_choice < /dev/tty
+                        if [ -n "$project_choice" ] && [ "$project_choice" -ge 1 ] && [ "$project_choice" -le ${#projects[@]} ] 2>/dev/null; then
+                            jira_project="${project_keys[$((project_choice-1))]}"
+                            info "Selected project: $jira_project"
+                        else
+                            error "Invalid project selection."
+                            exit 1
+                        fi
+                    else
+                        read -p "Enter your default Jira project key (e.g., SCRUM, PROJ): " jira_project < /dev/tty
+                        if [ -z "$jira_project" ]; then
+                            error "Error: Default project key is required."
+                            exit 1
+                        fi
+                    fi
+                else
+                    read -p "Enter your default Jira project key (e.g., SCRUM, PROJ): " jira_project < /dev/tty
+                    if [ -z "$jira_project" ]; then
+                        error "Error: Default project key is required."
+                        exit 1
+                    fi
+                fi
+                
+                echo ""
+                info "Fetching available boards for project $jira_project..."
+                boards_json=$(curl -s -u "$jira_user:$jira_password" "$jira_server/rest/agile/1.0/board?projectKeyOrId=$jira_project" 2>&1)
+                if [ $? -eq 0 ] && [ -n "$boards_json" ] && ! echo "$boards_json" | grep -qi "error\|unauthorized\|invalid"; then
+                    boards=()
+                    board_names=()
+                    if command -v jq >/dev/null 2>&1; then
+                        board_count=$(echo "$boards_json" | jq -r '.values | length' 2>/dev/null)
+                        if [ -n "$board_count" ] && [ "$board_count" != "null" ] && [ "$board_count" -gt 0 ] 2>/dev/null; then
+                            for i in $(seq 0 $((board_count-1))); do
+                                board_name=$(echo "$boards_json" | jq -r ".values[$i].name" 2>/dev/null)
+                                if [ -n "$board_name" ] && [ "$board_name" != "null" ]; then
+                                    boards+=("$board_name")
+                                    board_names+=("$board_name")
+                                fi
+                            done
+                        fi
+                    else
+                        while IFS= read -r line; do
+                            board_name=$(echo "$line" | grep -o '"name":"[^"]*"' | sed 's/"name":"\([^"]*\)"/\1/' | head -1)
+                            if [ -n "$board_name" ]; then
+                                boards+=("$board_name")
+                                board_names+=("$board_name")
+                            fi
+                        done <<< "$boards_json"
+                    fi
+                    
+                    if [ ${#boards[@]} -gt 0 ]; then
+                        echo ""
+                        echo "Available boards:"
+                        for i in "${!boards[@]}"; do
+                            echo "$((i+1))) ${boards[$i]}"
+                        done
+                        echo ""
+                        read -p "Select a board (1-${#boards[@]}): " board_choice < /dev/tty
+                        if [ -n "$board_choice" ] && [ "$board_choice" -ge 1 ] && [ "$board_choice" -le ${#boards[@]} ] 2>/dev/null; then
+                            jira_board="${board_names[$((board_choice-1))]}"
+                            info "Selected board: $jira_board"
+                        else
+                            error "Invalid board selection."
+                            exit 1
+                        fi
+                    else
+                        read -p "Enter your default board name (e.g., SCRUM board): " jira_board < /dev/tty
+                        if [ -z "$jira_board" ]; then
+                            error "Error: Default board name is required."
+                            exit 1
+                        fi
+                    fi
+                else
+                    read -p "Enter your default board name (e.g., SCRUM board): " jira_board < /dev/tty
+                    if [ -z "$jira_board" ]; then
+                        error "Error: Default board name is required."
+                        exit 1
+                    fi
+                fi
+                
+                info "Initializing Jira configuration..."
+                if JIRA_API_TOKEN="$jira_password" jira init --force --installation cloud --server "$jira_server" --login "$jira_user" --project "$jira_project" --board "$jira_board" >/dev/null 2>&1; then
+                    info "Jira configuration initialized successfully."
+                else
+                    error "Failed to initialize Jira configuration."
+                    error "Please run 'jira init' manually to complete the setup."
+                    exit 1
+                fi
+                
+                if command -v jira >/dev/null 2>&1; then
+                    info "Testing Jira connection..."
+                    if jira issue list --help >/dev/null 2>&1 || jira --help 2>&1 | grep -q "issue list"; then
+                        if command -v timeout >/dev/null 2>&1; then
+                            test_output=$(timeout 10 jira issue list --paginate 1 2>&1)
+                            test_exit=$?
+                        else
+                            test_output=$(jira issue list --paginate 1 2>&1)
+                            test_exit=$?
+                        fi
+                    else
+                        if command -v timeout >/dev/null 2>&1; then
+                            test_output=$(timeout 10 jira ls --limit 1 2>&1)
+                            test_exit=$?
+                        else
+                            test_output=$(jira ls --limit 1 2>&1)
+                            test_exit=$?
+                        fi
+                    fi
+                    
+                    if [ $test_exit -eq 0 ] && [ -n "$test_output" ] && ! echo "$test_output" | grep -qi "error\|invalid\|failed\|usage:"; then
+                        info "Jira connection verified successfully."
+                    else
+                        if [ $test_exit -eq 124 ]; then
+                            error "Jira connection test timed out."
+                        elif echo "$test_output" | grep -qi "API.*removed\|migrate.*API\|CHANGE-2046"; then
+                            error "ERROR: Jira CLI doesn't support the current Jira API."
+                            error ""
+                            error "To fix this:"
+                            error "  1. Make sure you have the latest jira-cli installed"
+                            error "  2. Check: https://github.com/ankitpokhrel/jira-cli"
+                            error "  3. After fixing, test with: jira issue list"
+                        elif echo "$test_output" | grep -qi "authentication\|unauthorized\|invalid.*token\|invalid.*password"; then
+                            error "ERROR: Jira authentication failed."
+                            error ""
+                            error "Possible issues:"
+                            error "  - Invalid API token or password"
+                            error "  - Token may have expired"
+                            error "  - Username/email may be incorrect"
+                            error ""
+                            error "To fix this:"
+                            error "  1. Verify your API token at: https://id.atlassian.com/manage-profile/security/api-tokens"
+                            error "  2. Make sure your username/email is correct"
+                            error "  3. Re-run 'fit setup' to reconfigure"
+                            error "  4. Or manually edit: $JIRA_CONFIG_FILE"
+                        elif echo "$test_output" | grep -qi "endpoint\|server\|connection"; then
+                            error "ERROR: Could not connect to Jira server."
+                            error ""
+                            error "Possible issues:"
+                            error "  - Incorrect server URL: $jira_server"
+                            error "  - Network connectivity issues"
+                            error "  - Server may be down"
+                            error ""
+                            error "To fix this:"
+                            error "  1. Verify the server URL is correct: $jira_server"
+                            error "  2. Check your network connection"
+                            error "  3. Re-run 'fit setup' to reconfigure"
+                        else
+                            error "ERROR: Jira connection test failed."
+                            error ""
+                            error "Error output:"
+                            echo "$test_output" | while IFS= read -r line; do
+                                [ -n "$line" ] && error "  $line"
+                            done
+                            error ""
+                            error "To troubleshoot:"
+                            error "  1. Test manually: jira issue list"
+                            error "  2. Check your config: $JIRA_CONFIG_FILE"
+                            error "  3. Verify your credentials are correct"
+                            error "  4. Try re-initializing: jira init"
+                        fi
+                        error ""
+                        error "Configuration was saved, but the connection test failed."
+                        error "You can fix the issue and test again with: jira issue list"
+                    fi
+                fi
+            else
+                info "Jira is already configured."
+            fi
+            
+            if command -v jira >/dev/null 2>&1; then
+                if [ ! -f "$JIRA_CONFIG_FILE" ]; then
+                    info "Jira CLI is installed but not configured."
+                    info "Run 'fit setup' again to configure it."
+                fi
+            fi
+            
+            action "Setting Up Jira"
+        elif [ "$PROJECT_MANAGER" = "none" ]; then
+            info "No project manager configured."
+        fi
+        
+        echo ""
+        echo -e "${INDENT}${TEAL}Setting Up Shortcuts${RESET}"
         if [ ! -f "$ZSHRC" ]; then
             info "Warning: ~/.zshrc not found. Skipping zsh completion and alias setup."
         else
@@ -1698,6 +2567,7 @@ case "$COMMAND" in
             fi
         fi
         
+        action "Setting Up Shortcuts"
         action "Setup Complete"
         ;;
 
