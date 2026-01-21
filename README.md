@@ -42,8 +42,8 @@ Avoid merge commits entirely. Use rebasing to keep your feature branch's history
 Keep the commit count to a minimum by ensuring each commit represents a complete, logical feature rather than a series of "work in progress" snapshots. Every commit must leave the application in a functional, working state, making the project history readable and ensuring the codebase remains stable for conflict resolution.
 
 * **Curated History:** `fit` recognizes that "checkpoint" commits are a safety net but a project's clutter. It provides streamlined "amend" or "absorb" logic, allowing you to save progress locally while automatically squashing changes into a single logical commit.
-* **Feature-Centric Development:** By reducing the friction of rewriting history, `fit` encourages you to curate your work. Its interface emphasizes the "Feature" over the "File Change," prompting you to finalize work only when it adds distinct value to the overall application context.
-*  By reducing the friction of rewriting history, `fit` encourages you to curate your work. It provides an interface that emphasizes the "Feature" over the "File Change," prompting you to finalize work only when it adds distinct value to the overall application context.
+* **Temporary Commits for Checkpoints:** When you need checkpoint commits during development (for safety, testing, or context switching), `fit temp` allows you to create temporary commits that are clearly marked and easily squashed later. These commits let you save progress frequently without cluttering your final history. When ready to ship, `fit ship` automatically squashes all temp commits in each stack into a single atomic commit, preserving only the feature-level message while maintaining a clean, readable history.
+* **Feature-Centric Development:** By reducing the friction of rewriting history, `fit` encourages you to curate your work. Its interface emphasizes the "Feature" over the "File Change," prompting you to finalize work only when it adds distinct value to the overall application context. The temp commit workflow bridges the gap between the safety of frequent checkpoints and the clarity of atomic feature commits.
 
 ### 3. Single-Person Branches
 Each branch should be worked on by a single person. This avoids "collaboration friction" and prevents the need for complex internal merges within a feature branch.
@@ -116,6 +116,10 @@ fit push
 - `fit commit [message] [-unsafe]` - Stage all changes and create/amend a commit
 - `fit uncommit [-unsafe]` - Remove last commit but keep changes (soft reset)
 - `fit push [message] [-unsafe]` - Commit, rebase, and force push with upstream
+- `fit temp [message]` - Create temporary commits for checkpointing during development
+  - With message: Creates a new temp commit stack
+  - Without message: Adds to existing temp commit stack (if last commit is a temp commit)
+- `fit ship` - Squash all temp commit stacks into atomic commits and push
 - `fit log` - Display git log in custom format
 
 ### Branch Management
