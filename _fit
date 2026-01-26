@@ -157,47 +157,41 @@ _fit() {
                             _message 'commit message'
                         fi
                     elif [[ ${#words[@]} -eq 4 ]] && [[ $words[(I)-id] -eq 0 ]]; then
-                        if [[ "$project_manager" = "jira" ]]; then
-                            local key_map_file=""
-                            for f in "$HOME/.fit/.jira_keys_"* "/tmp/fit_jira_keys_"*; do
-                                if [[ -f "$f" ]]; then
-                                    key_map_file="$f"
-                                    break
-                                fi
-                            done
-                            
-                            if [[ -n "$key_map_file" ]] && [[ -f "$key_map_file" ]]; then
-                                local selected_summary="$words[3]"
-                                local selected_key=$(grep "^${selected_summary}|" "$key_map_file" 2>/dev/null | cut -d'|' -f2)
-                                if [[ -n "$selected_key" ]]; then
-                                    compadd -- "-id"
-                                else
-                                    _describe 'option' '-id:task identifier'
-                                fi
-                            else
-                                _describe 'option' '-id:task identifier'
-                            fi
+                        if [[ "$project_manager" = "jira" ]] && command -v jira >/dev/null 2>&1; then
+                            compadd -- "-id"
                         else
                             _describe 'option' '-id:task identifier'
                         fi
                     elif [[ $words[(I)-id] -gt 0 ]] && [[ ${#words[@]} -eq $((words[(I)-id] + 1)) ]]; then
-                        if [[ "$project_manager" = "jira" ]]; then
-                            local key_map_file=""
-                            for f in "$HOME/.fit/.jira_keys_"* "/tmp/fit_jira_keys_"*; do
-                                if [[ -f "$f" ]]; then
-                                    key_map_file="$f"
-                                    break
-                                fi
-                            done
+                        if [[ "$project_manager" = "jira" ]] && command -v jira >/dev/null 2>&1; then
+                            local -a jira_keys
+                            local temp_file
+                            temp_file=$(mktemp 2>/dev/null || echo "/tmp/fit_jira_keys_$$")
                             
-                            if [[ -n "$key_map_file" ]] && [[ -f "$key_map_file" ]]; then
-                                local selected_summary="$words[3]"
-                                local selected_key=$(grep "^${selected_summary}|" "$key_map_file" 2>/dev/null | cut -d'|' -f2)
-                                if [[ -n "$selected_key" ]]; then
-                                    compadd -- "$selected_key"
-                                else
-                                    _message 'task_id'
-                                fi
+                            (if command -v timeout >/dev/null 2>&1; then
+                                timeout 3 jira issue list --columns key --no-headers 2>/dev/null
+                            else
+                                jira issue list --columns key --no-headers 2>/dev/null
+                            fi) | head -50 > "$temp_file" 2>/dev/null
+                            
+                            if [ -s "$temp_file" ]; then
+                                while IFS= read -r line || [ -n "$line" ]; do
+                                    line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                                    if [ -n "$line" ]; then
+                                        local key=$(echo "$line" | grep -oE '[A-Z]+-[0-9]+' | head -1)
+                                        if [ -n "$key" ] && [[ ! "$line" =~ ^(KEY|Usage|Error|Failed) ]]; then
+                                            jira_keys+=("$key")
+                                        fi
+                                    fi
+                                done < "$temp_file"
+                            fi
+                            
+                            rm -f "$temp_file" 2>/dev/null
+                            
+                            if [ ${#jira_keys[@]} -gt 0 ]; then
+                                for key in "${jira_keys[@]}"; do
+                                    compadd -- "$key"
+                                done
                             else
                                 _message 'task_id'
                             fi
