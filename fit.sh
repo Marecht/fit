@@ -461,7 +461,7 @@ show_log() {
         echo -e "${YELLOW}[${formatted_date}]${RESET} ${CYAN}${author} <${email}>${RESET} ${GRAY}${commit_id}${RESET}"
         echo -e "${INDENT}${INDENT}${WHITE}- ${message}${RESET}"
         echo
-    done | less -R
+    done | less -RX
 }
 
 show_stash_list_and_select() {
@@ -475,21 +475,21 @@ show_stash_list_and_select() {
     echo -e "${TEAL}Stash List:${RESET}" >&2
     echo "" >&2
     
-    local index=0
-    while [ $index -lt "$stash_count" ]; do
+    local index=$((stash_count - 1))
+    while [ $index -ge 0 ]; do
         local stash_ref="stash@{$index}"
         local stash_info=$(git log --format="%ad|%s" --date=local -1 "$stash_ref" 2>/dev/null)
-        
+
         if [ -z "$stash_info" ]; then
-            index=$((index + 1))
+            index=$((index - 1))
             continue
         fi
-        
+
         local date=$(echo "$stash_info" | cut -d'|' -f1)
         local message=$(echo "$stash_info" | cut -d'|' -f2-)
         local branch=""
         local stash_message=""
-        
+
         if echo "$message" | grep -q "^WIP on"; then
             branch=$(echo "$message" | sed -n 's/^WIP on \([^:]*\):.*/\1/p')
             stash_message=$(echo "$message" | sed -n 's/^WIP on [^:]*: [^ ]* \(.*\)/\1/p')
@@ -503,18 +503,18 @@ show_stash_list_and_select() {
             fi
             stash_message="$message"
         fi
-        
+
         if [ -z "$stash_message" ]; then
             stash_message="(no message)"
         fi
-        
+
         echo -e "${INDENT}${CYAN}[$index] stash@{$index}${RESET}" >&2
         echo -e "${INDENT}${INDENT}${YELLOW}Date:${RESET} ${GRAY}$date${RESET}" >&2
         echo -e "${INDENT}${INDENT}${YELLOW}Branch:${RESET} ${GRAY}$branch${RESET}" >&2
         echo -e "${INDENT}${INDENT}${YELLOW}Message:${RESET} ${GRAY}$stash_message${RESET}" >&2
         echo "" >&2
-        
-        index=$((index + 1))
+
+        index=$((index - 1))
     done
     
     echo -e "${TEAL}Select a stash (0-$((stash_count - 1))):${RESET} " >&2
@@ -650,7 +650,18 @@ show_help() {
     echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- git stash clear${RESET}"
     echo ""
-    
+
+    echo -e "${CYAN}fit snapshot [message]${RESET}"
+    echo -e "${INDENT}${GRAY}Stashes the current working directory changes and immediately re-applies them.${RESET}"
+    echo -e "${INDENT}${GRAY}The stash is kept in history as a snapshot reference point.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- message (optional): Snapshot message. If omitted, stashes without a message.${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git stash push -m \"<message>\" (if message provided)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git stash push (if no message)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git stash apply stash@{0}${RESET}"
+    echo ""
+
     if [ "$USE_GITHUB" = "true" ]; then
         echo -e "${CYAN}fit gh-reviews${RESET}"
         echo -e "${INDENT}${GRAY}Displays all branches and their pull request review status.${RESET}"
@@ -977,6 +988,21 @@ case "$COMMAND" in
         
         action_with_spinner_and_output "Clearing All Stashes" git stash clear
         info "All stashes have been deleted."
+        ;;
+
+    snapshot)
+        stash_count_before=$(git stash list 2>/dev/null | wc -l | tr -d ' ')
+        if [ -n "$ARG1" ]; then
+            action_with_spinner_and_output "Snapshotting Changes" git stash push -m "$ARG1"
+        else
+            action_with_spinner_and_output "Snapshotting Changes" git stash push
+        fi
+        stash_count_after=$(git stash list 2>/dev/null | wc -l | tr -d ' ')
+        if [ "$stash_count_after" -gt "$stash_count_before" ]; then
+            action_with_spinner_and_output "Restoring Snapshot" git stash apply stash@{0}
+        else
+            info "Nothing to snapshot (no changes to stash)."
+        fi
         ;;
 
     gh-reviews)

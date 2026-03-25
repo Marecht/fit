@@ -24,7 +24,7 @@ _fit() {
         use_github=$(echo "$USE_GITHUB" | tr -d '\r' | xargs)
     fi
     
-    local commands="rebase rebase-continue rebase-abort commit uncommit push log branch default-repository-branch new-branch stash stash-pop stash-apply stash-clear setup help"
+    local commands="rebase rebase-continue rebase-abort commit uncommit push log branch default-repository-branch new-branch stash stash-pop stash-apply stash-clear snapshot setup help"
     
     if [ "$use_github" = "true" ]; then
         commands="$commands gh-reviews gh-checks"
@@ -98,7 +98,7 @@ _fit() {
                         COMPREPLY=()
                     fi
                     ;;
-                commit|push|stash|uncommit)
+                commit|push|stash|snapshot|uncommit)
                     if [[ "$cur" == -* ]]; then
                         local has_unsafe=false
                         for word in "${words[@]}"; do
@@ -220,7 +220,7 @@ _fit_alias() {
                         COMPREPLY=()
                     fi
                     ;;
-                commit|push|stash|uncommit)
+                commit|push|stash|snapshot|uncommit)
                     if [[ "$cur" == -* ]]; then
                         local has_unsafe=false
                         for word in "${words[@]}"; do

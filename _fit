@@ -37,6 +37,7 @@ _fit() {
         'stash-pop:apply and remove stash from list'
         'stash-apply:apply stash but keep in list'
         'stash-clear:delete all stashes'
+        'snapshot:stash changes and immediately re-apply them, keeping stash in history'
         'setup:configure git identity and zsh completion'
         'help:display detailed help information'
     )
@@ -200,7 +201,7 @@ _fit() {
                         fi
                     fi
                     ;;
-                commit|push|stash)
+                commit|push|stash|snapshot)
                     _message
                     ;;
                 default-repository-branch)
