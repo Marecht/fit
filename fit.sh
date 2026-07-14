@@ -393,15 +393,56 @@ check_origin() {
 }
 
 # Helper function to run rebase logic
+# Helper function to extract the branch id (substring before the first underscore)
+extract_branch_id() {
+    case "$1" in
+        *_*) echo "${1%%_*}" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Helper function to get the current branch's id
+get_current_branch_id() {
+    local branch_name
+    branch_name=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+    if [ -z "$branch_name" ] || [ "$branch_name" = "HEAD" ]; then
+        echo ""
+        return
+    fi
+    extract_branch_id "$branch_name"
+}
+
+# Helper function to prepend the current branch's id to a commit message (unless already present)
+add_branch_id_prefix() {
+    local message="$1"
+    local branch_id
+    branch_id=$(get_current_branch_id)
+
+    if [ -z "$branch_id" ]; then
+        echo "$message"
+        return
+    fi
+
+    case "$message" in
+        "${branch_id} "*)
+            echo "$message"
+            ;;
+        *)
+            echo "${branch_id} ${message}"
+            ;;
+    esac
+}
+
 do_commit() {
     local commit_message="$1"
-    
+
     action_with_spinner "Staging All Changes" git add -A
-    
+
     if [ -z "$commit_message" ]; then
         check_origin
         action_with_spinner_and_output "Amending Commit" git commit --amend --no-edit --allow-empty
     else
+        commit_message=$(add_branch_id_prefix "$commit_message")
         action_with_spinner_and_output "Creating New Commit" git commit -m "$commit_message" --allow-empty
     fi
 }
@@ -928,7 +969,12 @@ case "$COMMAND" in
         
         # Format commit message
         past_tense=$(get_past_tense "$ARG1")
-        commit_message="${past_tense} $commit_message_input"
+        branch_id=$(extract_branch_id "$branch_name")
+        if [ -n "$branch_id" ]; then
+            commit_message="${branch_id} ${past_tense} $commit_message_input"
+        else
+            commit_message="${past_tense} $commit_message_input"
+        fi
         
         # Create and checkout new branch
         action_with_spinner_and_output "Creating New Branch" git checkout -b "$branch_name"
@@ -1203,7 +1249,7 @@ case "$COMMAND" in
         fi
         
         if [ -n "$ARG1" ]; then
-            base_message="$ARG1"
+            base_message=$(add_branch_id_prefix "$ARG1")
             echo -e "${TEAL}Enter Temp commit message:${RESET} "
             read -r temp_message < /dev/tty
             
