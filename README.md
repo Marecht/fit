@@ -136,6 +136,17 @@ fit push
 - `fit stash-pop` - Interactively select and apply a stash (removes from stash list)
 - `fit stash-apply` - Interactively select and apply a stash (keeps in stash list)
 - `fit stash-clear` - Delete all stashes (with confirmation)
+- `fit snapshot [message]` - Stash changes and immediately re-apply them, keeping the stash as a restore point
+
+### Worktrees
+
+- `fit merge-work-tree` (also `fit merge-worktree`) - Bring the work from a worktree into the main repository as uncommitted changes
+  - Lists all worktrees and asks which one to merge
+  - Asks for the branch the work should end up on (created if it doesn't exist)
+  - Commits everything in the worktree, deletes the worktree, checks out the target branch in the main repository and leaves the changes staged but uncommitted
+  - If the target branch is new, the worktree's own commit history is kept and only the final commit is uncommitted
+  - If the target branch already exists, the worktree's work is squashed on top of it so its history stays intact
+  - Must be run from the main repository (not from inside the worktree being merged), and the main repository must have no uncommitted changes
 
 ### GitHub Integration (requires GitHub CLI)
 
@@ -159,6 +170,7 @@ The `fit setup` command automatically creates aliases for all commands (except `
 - `f-stash-pop` → `fit stash-pop`
 - `f-stash-apply` → `fit stash-apply`
 - `f-stash-clear` → `fit stash-clear`
+- `f-merge-worktree` → `fit merge-worktree`
 - `f-gh-reviews` → `fit gh-reviews`
 - `f-gh-checks` → `fit gh-checks`
 - And more...

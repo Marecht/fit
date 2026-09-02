@@ -575,6 +575,295 @@ show_stash_list_and_select() {
     return 0
 }
 
+# Helper function to get the path of the main working tree (first entry of worktree list)
+get_main_worktree_path() {
+    git worktree list --porcelain 2>/dev/null | while IFS= read -r line; do
+        case "$line" in
+            "worktree "*)
+                echo "${line#worktree }"
+                break
+                ;;
+        esac
+    done
+}
+
+# Helper function to collect all linked worktrees (excludes the main working tree)
+# Populates the WT_PATHS, WT_BRANCHES and WT_HEADS global arrays
+collect_worktrees() {
+    WT_PATHS=()
+    WT_BRANCHES=()
+    WT_HEADS=()
+
+    local main_path
+    main_path=$(get_main_worktree_path)
+
+    local cur_path=""
+    local cur_head=""
+    local cur_branch=""
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            "worktree "*)
+                cur_path="${line#worktree }"
+                cur_head=""
+                cur_branch=""
+                ;;
+            "HEAD "*)
+                cur_head="${line#HEAD }"
+                ;;
+            "branch refs/heads/"*)
+                cur_branch="${line#branch refs/heads/}"
+                ;;
+            "")
+                if [ -n "$cur_path" ] && [ "$cur_path" != "$main_path" ]; then
+                    WT_PATHS+=("$cur_path")
+                    WT_HEADS+=("$cur_head")
+                    WT_BRANCHES+=("$cur_branch")
+                fi
+                cur_path=""
+                cur_head=""
+                cur_branch=""
+                ;;
+        esac
+    done < <(git worktree list --porcelain 2>/dev/null; echo "")
+}
+
+# Helper function to display the collected worktrees and let the user pick one
+# Expects collect_worktrees to have been called first
+show_worktree_list_and_select() {
+    local worktree_count=${#WT_PATHS[@]}
+    if [ "$worktree_count" -eq 0 ]; then
+        info "No worktrees found." >&2
+        return 1
+    fi
+
+    echo "" >&2
+    echo -e "${TEAL}Worktree List:${RESET}" >&2
+    echo "" >&2
+
+    local index=0
+    while [ $index -lt $worktree_count ]; do
+        local branch="${WT_BRANCHES[$index]}"
+        if [ -z "$branch" ]; then
+            branch="(detached at $(echo "${WT_HEADS[$index]}" | cut -c1-7))"
+        fi
+
+        local changed_files=$(git -C "${WT_PATHS[$index]}" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+
+        echo -e "${INDENT}${CYAN}[$index] $branch${RESET}" >&2
+        echo -e "${INDENT}${INDENT}${YELLOW}Path:${RESET} ${GRAY}${WT_PATHS[$index]}${RESET}" >&2
+        echo -e "${INDENT}${INDENT}${YELLOW}Changes:${RESET} ${GRAY}${changed_files} file(s)${RESET}" >&2
+        echo "" >&2
+
+        index=$((index + 1))
+    done
+
+    echo -e "${TEAL}Select a worktree (0-$((worktree_count - 1))):${RESET} " >&2
+    read -r selected_index < /dev/tty
+
+    if [ -z "$selected_index" ]; then
+        info "No selection made. Exiting." >&2
+        return 1
+    fi
+
+    if ! [[ "$selected_index" =~ ^[0-9]+$ ]] || [ "$selected_index" -lt 0 ] || [ "$selected_index" -ge "$worktree_count" ]; then
+        error "Invalid selection. Please enter a number between 0 and $((worktree_count - 1))." >&2
+        return 1
+    fi
+
+    echo "$selected_index"
+    return 0
+}
+
+# Helper function to merge a worktree's work into the main repository as uncommitted changes
+do_merge_worktree() {
+    if ! git rev-parse --git-dir >/dev/null 2>&1; then
+        error "ERROR: Not in a git repository!"
+        return 1
+    fi
+
+    check_git_identity
+
+    local main_path
+    main_path=$(get_main_worktree_path)
+    if [ -z "$main_path" ]; then
+        error "ERROR: Could not determine the main working tree path."
+        return 1
+    fi
+
+    collect_worktrees
+
+    local selected_index
+    selected_index=$(show_worktree_list_and_select)
+    if [ $? -ne 0 ]; then
+        return 0
+    fi
+
+    local wt_path="${WT_PATHS[$selected_index]}"
+    local wt_branch="${WT_BRANCHES[$selected_index]}"
+
+    local current_toplevel=$(git rev-parse --show-toplevel 2>/dev/null)
+    if [ "$current_toplevel" = "$wt_path" ]; then
+        error "ERROR: Cannot merge the worktree you are currently in."
+        error "Run this command from the main repository: $main_path"
+        return 1
+    fi
+
+    echo "" >&2
+    echo -e "${TEAL}Enter the target branch name:${RESET} " >&2
+    read -r target_branch < /dev/tty
+    target_branch=$(echo "$target_branch" | tr -d '\r' | xargs)
+
+    if [ -z "$target_branch" ]; then
+        info "No branch name entered. Operation cancelled."
+        return 0
+    fi
+
+    if ! git check-ref-format --branch "$target_branch" >/dev/null 2>&1; then
+        error "ERROR: \"$target_branch\" is not a valid branch name."
+        return 1
+    fi
+
+    if [ -n "$(git -C "$main_path" status --porcelain 2>/dev/null)" ]; then
+        error "ERROR: The main repository at $main_path has uncommitted changes."
+        error "Commit or stash them first (fit commit / fit stash), then run this command again."
+        return 1
+    fi
+
+    local target_exists=false
+    if git -C "$main_path" show-ref --verify --quiet "refs/heads/$target_branch"; then
+        target_exists=true
+    fi
+
+    # A branch that is checked out in another worktree cannot be checked out in the main repository
+    local index=0
+    while [ $index -lt ${#WT_PATHS[@]} ]; do
+        if [ "${WT_BRANCHES[$index]}" = "$target_branch" ] && [ "${WT_PATHS[$index]}" != "$wt_path" ]; then
+            error "ERROR: Branch \"$target_branch\" is checked out in another worktree:"
+            error "${WT_PATHS[$index]}"
+            return 1
+        fi
+        index=$((index + 1))
+    done
+
+    echo "" >&2
+    echo -e "${TEAL}Merging worktree into the main repository:${RESET}" >&2
+    info "Worktree:      $wt_path" >&2
+    info "Branch:        ${wt_branch:-(detached HEAD)}" >&2
+    if [ "$target_exists" = "true" ]; then
+        info "Target branch: $target_branch (existing)" >&2
+    else
+        info "Target branch: $target_branch (will be created)" >&2
+    fi
+    info "The worktree directory will be deleted and its work will end up uncommitted" >&2
+    info "on \"$target_branch\" in $main_path" >&2
+    echo "" >&2
+    echo -e "${TEAL}Continue? (yes/no):${RESET} " >&2
+    read -r confirmation < /dev/tty
+
+    if [ "$confirmation" != "yes" ]; then
+        info "Operation cancelled."
+        return 0
+    fi
+
+    local wt_commit_message="[worktree] ${wt_branch:-detached} $(date +'%Y-%m-%d %H:%M:%S')"
+
+    action_with_spinner "Staging Worktree Changes" git -C "$wt_path" add -A
+    action_with_spinner_and_output "Creating Worktree Commit" git -C "$wt_path" commit -m "$wt_commit_message" --allow-empty
+    if [ $? -ne 0 ]; then
+        error "ERROR: Failed to commit the worktree changes. Nothing was deleted."
+        return 1
+    fi
+
+    local wt_commit=$(git -C "$wt_path" rev-parse HEAD 2>/dev/null)
+    if [ -z "$wt_commit" ]; then
+        error "ERROR: Could not resolve the worktree commit. Nothing was deleted."
+        return 1
+    fi
+
+    # The commit only exists on the worktree branch, so this path needs the arbitrary
+    # commit rewritten onto the target branch after the worktree is gone
+    local reset_target=""
+    if [ "$target_exists" = "false" ] || [ "$target_branch" = "$wt_branch" ]; then
+        if ! git -C "$main_path" rev-parse --verify --quiet "${wt_commit}^" >/dev/null 2>&1; then
+            error "ERROR: The worktree commit has no parent, so it cannot be uncommitted."
+            error "Your changes are committed on \"${wt_branch:-detached HEAD}\" as \"$wt_commit_message\"."
+            return 1
+        fi
+        reset_target=$(git -C "$main_path" rev-parse "${wt_commit}^")
+    fi
+
+    action_with_spinner_and_output "Deleting Worktree" git -C "$main_path" worktree remove --force "$wt_path"
+    if [ $? -ne 0 ]; then
+        error "ERROR: Failed to delete the worktree."
+        error "Your changes are committed on \"${wt_branch:-detached HEAD}\" as \"$wt_commit_message\"."
+        return 1
+    fi
+
+    if [ "$target_exists" = "false" ]; then
+        action_with_spinner_and_output "Creating Branch $target_branch" git -C "$main_path" branch "$target_branch" "$wt_commit"
+        if [ $? -ne 0 ]; then
+            error "ERROR: Failed to create branch \"$target_branch\"."
+            error "Your changes are committed on \"${wt_branch:-detached HEAD}\" as \"$wt_commit_message\"."
+            return 1
+        fi
+    fi
+
+    action_with_spinner_and_output "Checking Out $target_branch" git -C "$main_path" checkout "$target_branch"
+    if [ $? -ne 0 ]; then
+        error "ERROR: Failed to check out \"$target_branch\"."
+        error "Your changes are committed on \"${wt_branch:-detached HEAD}\" as \"$wt_commit_message\"."
+        return 1
+    fi
+
+    if [ -n "$reset_target" ]; then
+        # The target branch now points at the arbitrary commit, so drop it and keep the changes
+        if [ -n "$wt_branch" ] && [ "$wt_branch" != "$target_branch" ]; then
+            if git -C "$main_path" branch -d "$wt_branch" >/dev/null 2>&1; then
+                action "Deleting Worktree Branch $wt_branch"
+            else
+                info "Kept branch \"$wt_branch\"."
+            fi
+        fi
+        action_with_spinner_and_output "Uncommitting Worktree Commit" git -C "$main_path" reset --soft "$reset_target"
+        if [ $? -ne 0 ]; then
+            error "ERROR: Failed to uncommit \"$wt_commit_message\" on \"$target_branch\"."
+            return 1
+        fi
+    else
+        # The target branch has its own history, so squash the worktree work on top of it
+        action_with_spinner_and_output "Applying Worktree Changes" git -C "$main_path" merge --squash "$wt_commit"
+        if [ $? -ne 0 ]; then
+            error "ERROR: Conflicts while applying the worktree changes onto \"$target_branch\"."
+            error "Resolve them in $main_path. The worktree work is kept on \"${wt_branch:-detached HEAD}\"."
+            return 1
+        fi
+        rm -f "$(git -C "$main_path" rev-parse --git-dir 2>/dev/null)/SQUASH_MSG" 2>/dev/null
+        rm -f "$(git -C "$main_path" rev-parse --git-dir 2>/dev/null)/MERGE_MSG" 2>/dev/null
+        git -C "$main_path" update-ref -d AUTO_MERGE >/dev/null 2>&1
+        if [ -n "$wt_branch" ]; then
+            if git -C "$main_path" branch -d "$wt_branch" >/dev/null 2>&1; then
+                action "Deleting Worktree Branch $wt_branch"
+            else
+                info "Kept branch \"$wt_branch\" (it has commits that are not on \"$target_branch\")."
+            fi
+        fi
+    fi
+
+    info "Worktree merged into \"$target_branch\" at $main_path"
+    info "Changes are uncommitted and staged."
+
+    local status_output=$(git -C "$main_path" status --short 2>/dev/null)
+    if [ -n "$status_output" ]; then
+        echo ""
+        while IFS= read -r line || [ -n "$line" ]; do
+            [ -n "$line" ] && info "$line"
+        done <<< "$status_output"
+    else
+        info "No changes were brought over (the worktree had nothing new)."
+    fi
+}
+
 show_help() {
     echo -e "${WHITE}fit - Git workflow automation tool${RESET}"
     echo ""
@@ -701,6 +990,29 @@ show_help() {
     echo -e "${INDENT}${INDENT}${GRAY}- git stash push -m \"<message>\" (if message provided)${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- git stash push (if no message)${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- git stash apply stash@{0}${RESET}"
+    echo ""
+
+    echo -e "${CYAN}fit merge-work-tree${RESET}"
+    echo -e "${INDENT}${GRAY}Brings the work from a worktree into the main repository as uncommitted changes.${RESET}"
+    echo -e "${INDENT}${GRAY}Lists all worktrees, asks which one to merge and which branch the work should end up on.${RESET}"
+    echo -e "${INDENT}${GRAY}The worktree is committed, deleted, and its changes are left staged but uncommitted${RESET}"
+    echo -e "${INDENT}${GRAY}on the target branch in the main repository.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- None (interactive worktree selection and branch name prompt)${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git worktree list --porcelain${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git -C <worktree> add -A${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git -C <worktree> commit -m \"[worktree] <branch> <timestamp>\" --allow-empty${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git worktree remove --force <worktree>${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git branch <target-branch> <commit> (only when the target branch is new)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git checkout <target-branch>${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git reset --soft <commit>^ (new target branch: keeps the worktree history)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git merge --squash <commit> (existing target branch: keeps its history)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git branch -d <worktree-branch> (only when it is fully contained in the target branch)${RESET}"
+    echo -e "${INDENT}${GRAY}Notes:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Must be run from the main repository, not from inside the worktree being merged.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- The main repository must have no uncommitted changes.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Also available as: fit merge-worktree${RESET}"
     echo ""
 
     if [ "$USE_GITHUB" = "true" ]; then
@@ -1049,6 +1361,14 @@ case "$COMMAND" in
         else
             info "Nothing to snapshot (no changes to stash)."
         fi
+        ;;
+
+    merge-work-tree)
+        do_merge_worktree
+        ;;
+
+    merge-worktree)
+        do_merge_worktree
         ;;
 
     gh-reviews)
