@@ -864,6 +864,127 @@ do_merge_worktree() {
     fi
 }
 
+# Helper function to find a branch name that is not taken yet
+build_unique_branch_name() {
+    local base="$1"
+    local candidate="$base"
+    local suffix=2
+    while git show-ref --verify --quiet "refs/heads/$candidate"; do
+        candidate="${base}-${suffix}"
+        suffix=$((suffix + 1))
+    done
+    echo "$candidate"
+}
+
+# Helper function to move the current branch state into a new worktree
+# Prints the worktree path on stdout, everything else on stderr so that
+# the output can be used directly: cd "$(fit worktree)"
+do_create_worktree() {
+    if ! git rev-parse --git-dir >/dev/null 2>&1; then
+        error "ERROR: Not in a git repository!" >&2
+        return 1
+    fi
+
+    check_git_identity
+
+    local main_path
+    main_path=$(get_main_worktree_path)
+    if [ -z "$main_path" ]; then
+        error "ERROR: Could not determine the main working tree path." >&2
+        return 1
+    fi
+
+    local src_path=$(git rev-parse --show-toplevel 2>/dev/null)
+    if [ -z "$src_path" ]; then
+        error "ERROR: Could not determine the current working tree path." >&2
+        return 1
+    fi
+
+    local current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+    local base_name=""
+
+    if [ -z "$current_branch" ] || [ "$current_branch" = "HEAD" ]; then
+        local short_sha=$(git rev-parse --short HEAD 2>/dev/null)
+        if [ -z "$short_sha" ]; then
+            error "ERROR: Could not resolve HEAD. Is there at least one commit?" >&2
+            return 1
+        fi
+        current_branch="(detached HEAD)"
+        base_name="detached-${short_sha}-worktree"
+    else
+        base_name="${current_branch}-worktree"
+    fi
+
+    # An explicit name wins over the derived one
+    if [ -n "$ARG1" ]; then
+        base_name="$ARG1"
+    fi
+
+    if ! git check-ref-format --branch "$base_name" >/dev/null 2>&1; then
+        error "ERROR: \"$base_name\" is not a valid branch name." >&2
+        return 1
+    fi
+
+    # The same branch cannot be checked out in two worktrees, so the worktree gets its own
+    local wt_branch=$(build_unique_branch_name "$base_name")
+
+    local worktrees_root="$(dirname "$main_path")/$(basename "$main_path")-worktrees"
+    local dir_name=$(echo "$wt_branch" | tr '/' '-')
+    local wt_path="$worktrees_root/$dir_name"
+    local path_suffix=2
+    while [ -e "$wt_path" ]; do
+        wt_path="$worktrees_root/${dir_name}-${path_suffix}"
+        path_suffix=$((path_suffix + 1))
+    done
+
+    # Move the uncommitted changes so the round trip through fit merge-worktree stays clean
+    local stashed=false
+    if [ -n "$(git -C "$src_path" status --porcelain 2>/dev/null)" ]; then
+        action_with_spinner_and_output "Collecting Uncommitted Changes" git -C "$src_path" stash push -u -m "[worktree] moved to $wt_branch" >&2
+        if [ $? -ne 0 ]; then
+            error "ERROR: Failed to collect the uncommitted changes. Nothing was changed." >&2
+            return 1
+        fi
+        stashed=true
+    fi
+
+    mkdir -p "$worktrees_root" 2>/dev/null
+    action_with_spinner_and_output "Creating Worktree $wt_branch" git -C "$src_path" worktree add "$wt_path" -b "$wt_branch" HEAD >&2
+    if [ $? -ne 0 ]; then
+        error "ERROR: Failed to create the worktree." >&2
+        if [ "$stashed" = "true" ]; then
+            action_with_spinner_and_output "Restoring Uncommitted Changes" git -C "$src_path" stash pop >&2
+        fi
+        return 1
+    fi
+
+    if [ "$stashed" = "true" ]; then
+        # --index keeps the staged/unstaged split, but it cannot always be replayed
+        git -C "$wt_path" stash pop --index >/dev/null 2>&1
+        if [ $? -ne 0 ]; then
+            action_with_spinner_and_output "Applying Changes In Worktree" git -C "$wt_path" stash pop >&2
+            if [ $? -ne 0 ]; then
+                error "ERROR: Failed to apply the changes in the worktree." >&2
+                error "They are kept in the stash, run \"fit stash-pop\" to get them back." >&2
+                return 1
+            fi
+        else
+            action "Applying Changes In Worktree" >&2
+        fi
+    fi
+
+    info "Worktree for \"$current_branch\" created on branch \"$wt_branch\"" >&2
+    if [ "$stashed" = "true" ]; then
+        info "Uncommitted changes were moved out of $src_path, which is now clean" >&2
+    else
+        info "There were no uncommitted changes to move" >&2
+    fi
+    info "Bring the work back with: fit merge-worktree" >&2
+    echo "" >&2
+
+    echo "$wt_path"
+}
+
 show_help() {
     echo -e "${WHITE}fit - Git workflow automation tool${RESET}"
     echo ""
@@ -990,6 +1111,23 @@ show_help() {
     echo -e "${INDENT}${INDENT}${GRAY}- git stash push -m \"<message>\" (if message provided)${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- git stash push (if no message)${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- git stash apply stash@{0}${RESET}"
+    echo ""
+
+    echo -e "${CYAN}fit worktree [name]${RESET}"
+    echo -e "${INDENT}${GRAY}Moves the current state of the branch you are on into a new worktree and prints its path.${RESET}"
+    echo -e "${INDENT}${GRAY}Uncommitted changes are moved along, so the repository you ran it from is left clean${RESET}"
+    echo -e "${INDENT}${GRAY}and the work can be brought back later with fit merge-worktree.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- name (optional): Branch name for the worktree. Defaults to <current-branch>-worktree.${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git stash push -u -m \"[worktree] moved to <branch>\" (only when there are changes)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git worktree add <path> -b <branch> HEAD${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git stash pop --index (inside the new worktree)${RESET}"
+    echo -e "${INDENT}${GRAY}Notes:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- The worktree gets its own branch, because git cannot check out one branch twice.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- A name that is already taken gets a -2, -3, ... suffix.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Worktrees are created in <repo>-worktrees next to the main repository.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Only the path goes to stdout, so you can run: cd \"\$(fit worktree)\"${RESET}"
     echo ""
 
     echo -e "${CYAN}fit merge-worktree${RESET}"
@@ -1360,6 +1498,10 @@ case "$COMMAND" in
         else
             info "Nothing to snapshot (no changes to stash)."
         fi
+        ;;
+
+    worktree)
+        do_create_worktree
         ;;
 
     merge-worktree)
