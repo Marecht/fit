@@ -992,7 +992,7 @@ show_help() {
     echo -e "${INDENT}${INDENT}${GRAY}- git stash apply stash@{0}${RESET}"
     echo ""
 
-    echo -e "${CYAN}fit merge-work-tree${RESET}"
+    echo -e "${CYAN}fit merge-worktree${RESET}"
     echo -e "${INDENT}${GRAY}Brings the work from a worktree into the main repository as uncommitted changes.${RESET}"
     echo -e "${INDENT}${GRAY}Lists all worktrees, asks which one to merge and which branch the work should end up on.${RESET}"
     echo -e "${INDENT}${GRAY}The worktree is committed, deleted, and its changes are left staged but uncommitted${RESET}"
@@ -1012,7 +1012,6 @@ show_help() {
     echo -e "${INDENT}${GRAY}Notes:${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- Must be run from the main repository, not from inside the worktree being merged.${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- The main repository must have no uncommitted changes.${RESET}"
-    echo -e "${INDENT}${INDENT}${GRAY}- Also available as: fit merge-worktree${RESET}"
     echo ""
 
     if [ "$USE_GITHUB" = "true" ]; then
@@ -1361,10 +1360,6 @@ case "$COMMAND" in
         else
             info "Nothing to snapshot (no changes to stash)."
         fi
-        ;;
-
-    merge-work-tree)
-        do_merge_worktree
         ;;
 
     merge-worktree)

@@ -38,7 +38,6 @@ _fit() {
         'stash-apply:apply stash but keep in list'
         'stash-clear:delete all stashes'
         'snapshot:stash changes and immediately re-apply them, keeping stash in history'
-        'merge-work-tree:merge a worktree into the main repository as uncommitted changes'
         'merge-worktree:merge a worktree into the main repository as uncommitted changes'
         'setup:configure git identity and zsh completion'
         'help:display detailed help information'
@@ -215,7 +214,7 @@ _fit() {
                         fi
                     fi
                     ;;
-                uncommit|stash-pop|stash-apply|stash-clear|rebase-continue|rebase-abort|gh-reviews|gh-checks|merge-work-tree|merge-worktree)
+                uncommit|stash-pop|stash-apply|stash-clear|rebase-continue|rebase-abort|gh-reviews|gh-checks|merge-worktree)
                     ;;
             esac
             ;;

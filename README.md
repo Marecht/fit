@@ -140,7 +140,7 @@ fit push
 
 ### Worktrees
 
-- `fit merge-work-tree` (also `fit merge-worktree`) - Bring the work from a worktree into the main repository as uncommitted changes
+- `fit merge-worktree` - Bring the work from a worktree into the main repository as uncommitted changes
   - Lists all worktrees and asks which one to merge
   - Asks for the branch the work should end up on (created if it doesn't exist)
   - Commits everything in the worktree, deletes the worktree, checks out the target branch in the main repository and leaves the changes staged but uncommitted
