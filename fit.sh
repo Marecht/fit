@@ -588,11 +588,13 @@ get_main_worktree_path() {
 }
 
 # Helper function to collect all linked worktrees (excludes the main working tree)
-# Populates the WT_PATHS, WT_BRANCHES and WT_HEADS global arrays
+# Populates the WT_PATHS, WT_BRANCHES, WT_HEADS and WT_CHANGES global arrays
+# Every worktree is collected, the selection list does its own filtering
 collect_worktrees() {
     WT_PATHS=()
     WT_BRANCHES=()
     WT_HEADS=()
+    WT_CHANGES=()
 
     local main_path
     main_path=$(get_main_worktree_path)
@@ -619,6 +621,7 @@ collect_worktrees() {
                     WT_PATHS+=("$cur_path")
                     WT_HEADS+=("$cur_head")
                     WT_BRANCHES+=("$cur_branch")
+                    WT_CHANGES+=("$(git -C "$cur_path" status --porcelain 2>/dev/null | wc -l | tr -d ' ')")
                 fi
                 cur_path=""
                 cur_head=""
@@ -630,10 +633,32 @@ collect_worktrees() {
 
 # Helper function to display the collected worktrees and let the user pick one
 # Expects collect_worktrees to have been called first
+# Worktrees without uncommitted changes are hidden unless $1 is "true"
+# Returns the index into the WT_* arrays, not the number shown in the list
 show_worktree_list_and_select() {
+    local show_all="$1"
     local worktree_count=${#WT_PATHS[@]}
+
     if [ "$worktree_count" -eq 0 ]; then
         info "No worktrees found." >&2
+        return 1
+    fi
+
+    local -a shown=()
+    local index=0
+    while [ $index -lt $worktree_count ]; do
+        if [ "$show_all" = "true" ] || [ "${WT_CHANGES[$index]}" -gt 0 ]; then
+            shown+=("$index")
+        fi
+        index=$((index + 1))
+    done
+
+    local shown_count=${#shown[@]}
+    local hidden_count=$((worktree_count - shown_count))
+
+    if [ "$shown_count" -eq 0 ]; then
+        info "No worktrees with uncommitted changes found." >&2
+        info "$hidden_count worktree(s) hidden. Use \"fit merge-worktree -all\" to pick one anyway." >&2
         return 1
     fi
 
@@ -641,24 +666,28 @@ show_worktree_list_and_select() {
     echo -e "${TEAL}Worktree List:${RESET}" >&2
     echo "" >&2
 
-    local index=0
-    while [ $index -lt $worktree_count ]; do
-        local branch="${WT_BRANCHES[$index]}"
+    local display=0
+    while [ $display -lt $shown_count ]; do
+        local real_index=${shown[$display]}
+        local branch="${WT_BRANCHES[$real_index]}"
         if [ -z "$branch" ]; then
-            branch="(detached at $(echo "${WT_HEADS[$index]}" | cut -c1-7))"
+            branch="(detached at $(echo "${WT_HEADS[$real_index]}" | cut -c1-7))"
         fi
 
-        local changed_files=$(git -C "${WT_PATHS[$index]}" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
-
-        echo -e "${INDENT}${CYAN}[$index] $branch${RESET}" >&2
-        echo -e "${INDENT}${INDENT}${YELLOW}Path:${RESET} ${GRAY}${WT_PATHS[$index]}${RESET}" >&2
-        echo -e "${INDENT}${INDENT}${YELLOW}Changes:${RESET} ${GRAY}${changed_files} file(s)${RESET}" >&2
+        echo -e "${INDENT}${CYAN}[$display] $branch${RESET}" >&2
+        echo -e "${INDENT}${INDENT}${YELLOW}Path:${RESET} ${GRAY}${WT_PATHS[$real_index]}${RESET}" >&2
+        echo -e "${INDENT}${INDENT}${YELLOW}Changes:${RESET} ${GRAY}${WT_CHANGES[$real_index]} file(s)${RESET}" >&2
         echo "" >&2
 
-        index=$((index + 1))
+        display=$((display + 1))
     done
 
-    echo -e "${TEAL}Select a worktree (0-$((worktree_count - 1))):${RESET} " >&2
+    if [ "$hidden_count" -gt 0 ]; then
+        info "$hidden_count worktree(s) with no uncommitted changes hidden (-all shows them)." >&2
+        echo "" >&2
+    fi
+
+    echo -e "${TEAL}Select a worktree (0-$((shown_count - 1))):${RESET} " >&2
     read -r selected_index < /dev/tty
 
     if [ -z "$selected_index" ]; then
@@ -666,12 +695,12 @@ show_worktree_list_and_select() {
         return 1
     fi
 
-    if ! [[ "$selected_index" =~ ^[0-9]+$ ]] || [ "$selected_index" -lt 0 ] || [ "$selected_index" -ge "$worktree_count" ]; then
-        error "Invalid selection. Please enter a number between 0 and $((worktree_count - 1))." >&2
+    if ! [[ "$selected_index" =~ ^[0-9]+$ ]] || [ "$selected_index" -lt 0 ] || [ "$selected_index" -ge "$shown_count" ]; then
+        error "Invalid selection. Please enter a number between 0 and $((shown_count - 1))." >&2
         return 1
     fi
 
-    echo "$selected_index"
+    echo "${shown[$selected_index]}"
     return 0
 }
 
@@ -694,7 +723,12 @@ do_merge_worktree() {
     collect_worktrees
 
     local selected_index
-    selected_index=$(show_worktree_list_and_select)
+    local show_all=false
+    if [ "$ARG1" = "-all" ]; then
+        show_all=true
+    fi
+
+    selected_index=$(show_worktree_list_and_select "$show_all")
     if [ $? -ne 0 ]; then
         return 0
     fi
@@ -1130,13 +1164,15 @@ show_help() {
     echo -e "${INDENT}${INDENT}${GRAY}- Only the path goes to stdout, so you can run: cd \"\$(fit worktree)\"${RESET}"
     echo ""
 
-    echo -e "${CYAN}fit merge-worktree${RESET}"
+    echo -e "${CYAN}fit merge-worktree [-all]${RESET}"
     echo -e "${INDENT}${GRAY}Brings the work from a worktree into the main repository as uncommitted changes.${RESET}"
-    echo -e "${INDENT}${GRAY}Lists all worktrees, asks which one to merge and which branch the work should end up on.${RESET}"
+    echo -e "${INDENT}${GRAY}Lists the worktrees that have uncommitted changes, asks which one to merge${RESET}"
+    echo -e "${INDENT}${GRAY}and which branch the work should end up on.${RESET}"
     echo -e "${INDENT}${GRAY}The worktree is committed, deleted, and its changes are left staged but uncommitted${RESET}"
     echo -e "${INDENT}${GRAY}on the target branch in the main repository.${RESET}"
     echo -e "${INDENT}${GRAY}Parameters:${RESET}"
-    echo -e "${INDENT}${INDENT}${GRAY}- None (interactive worktree selection and branch name prompt)${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- -all (optional): Also list worktrees that have no uncommitted changes.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}  Worktree selection and the branch name are interactive prompts.${RESET}"
     echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- git worktree list --porcelain${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- git -C <worktree> add -A${RESET}"
@@ -1150,6 +1186,8 @@ show_help() {
     echo -e "${INDENT}${GRAY}Notes:${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- Must be run from the main repository, not from inside the worktree being merged.${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- The main repository must have no uncommitted changes.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Worktrees with no uncommitted changes are hidden, but are left untouched.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}  A worktree whose work is already committed only shows up with -all.${RESET}"
     echo ""
 
     if [ "$USE_GITHUB" = "true" ]; then
