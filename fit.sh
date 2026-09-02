@@ -587,17 +587,57 @@ get_main_worktree_path() {
     done
 }
 
+# Helper function to get a worktree's creation time as epoch seconds (empty when unknown)
+# Uses the birth time of the worktree's admin directory, falling back to the mtime of the
+# gitdir file inside it, which git writes once when the worktree is created
+get_worktree_created_at() {
+    local wt_path="$1"
+    local admin_dir
+    admin_dir=$(git -C "$wt_path" rev-parse --absolute-git-dir 2>/dev/null)
+
+    if [ -z "$admin_dir" ] || [ ! -d "$admin_dir" ]; then
+        echo ""
+        return
+    fi
+
+    local created=""
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        created=$(stat -f %B "$admin_dir" 2>/dev/null)
+        if [ -z "$created" ] || [ "$created" = "0" ]; then
+            created=$(stat -f %m "$admin_dir/gitdir" 2>/dev/null)
+        fi
+    else
+        created=$(stat -c %W "$admin_dir" 2>/dev/null)
+        if [ -z "$created" ] || [ "$created" = "0" ]; then
+            created=$(stat -c %Y "$admin_dir/gitdir" 2>/dev/null)
+        fi
+    fi
+
+    if ! [[ "$created" =~ ^[0-9]+$ ]] || [ "$created" = "0" ]; then
+        echo ""
+        return
+    fi
+
+    echo "$created"
+}
+
 # Helper function to collect all linked worktrees (excludes the main working tree)
-# Populates the WT_PATHS, WT_BRANCHES, WT_HEADS and WT_CHANGES global arrays
+# Populates the WT_PATHS, WT_BRANCHES, WT_HEADS, WT_CHANGES and WT_CREATED global arrays,
+# ordered newest first. Worktrees with an unknown creation time keep git's own order.
 # Every worktree is collected, the selection list does its own filtering
 collect_worktrees() {
     WT_PATHS=()
     WT_BRANCHES=()
     WT_HEADS=()
     WT_CHANGES=()
+    WT_CREATED=()
 
     local main_path
     main_path=$(get_main_worktree_path)
+
+    local -a raw_paths=()
+    local -a raw_heads=()
+    local -a raw_branches=()
 
     local cur_path=""
     local cur_head=""
@@ -618,10 +658,9 @@ collect_worktrees() {
                 ;;
             "")
                 if [ -n "$cur_path" ] && [ "$cur_path" != "$main_path" ]; then
-                    WT_PATHS+=("$cur_path")
-                    WT_HEADS+=("$cur_head")
-                    WT_BRANCHES+=("$cur_branch")
-                    WT_CHANGES+=("$(git -C "$cur_path" status --porcelain 2>/dev/null | wc -l | tr -d ' ')")
+                    raw_paths+=("$cur_path")
+                    raw_heads+=("$cur_head")
+                    raw_branches+=("$cur_branch")
                 fi
                 cur_path=""
                 cur_head=""
@@ -629,6 +668,38 @@ collect_worktrees() {
                 ;;
         esac
     done < <(git worktree list --porcelain 2>/dev/null; echo "")
+
+    if [ ${#raw_paths[@]} -eq 0 ]; then
+        return
+    fi
+
+    # Sort newest first; -s keeps git's order for worktrees that share a timestamp
+    # or have none at all, so an unsupported filesystem just leaves the order as it was
+    local sorted
+    sorted=$(
+        local i=0
+        while [ $i -lt ${#raw_paths[@]} ]; do
+            local timestamp=$(get_worktree_created_at "${raw_paths[$i]}")
+            [ -z "$timestamp" ] && timestamp=0
+            printf '%s %s\n' "$timestamp" "$i"
+            i=$((i + 1))
+        done | sort -k1,1nr -s
+    )
+
+    local timestamp=""
+    local index=""
+    while read -r timestamp index; do
+        [ -z "$index" ] && continue
+        WT_PATHS+=("${raw_paths[$index]}")
+        WT_HEADS+=("${raw_heads[$index]}")
+        WT_BRANCHES+=("${raw_branches[$index]}")
+        WT_CHANGES+=("$(git -C "${raw_paths[$index]}" status --porcelain 2>/dev/null | wc -l | tr -d ' ')")
+        if [ "$timestamp" = "0" ]; then
+            WT_CREATED+=("")
+        else
+            WT_CREATED+=("$timestamp")
+        fi
+    done <<< "$sorted"
 }
 
 # Helper function to display the collected worktrees and let the user pick one
@@ -658,7 +729,7 @@ show_worktree_list_and_select() {
 
     if [ "$shown_count" -eq 0 ]; then
         info "No worktrees with uncommitted changes found." >&2
-        info "$hidden_count worktree(s) hidden. Use \"fit merge-worktree -all\" to pick one anyway." >&2
+        info "$hidden_count worktree(s) hidden. Use \"fit worktree-merge -all\" to pick one anyway." >&2
         return 1
     fi
 
@@ -666,20 +737,34 @@ show_worktree_list_and_select() {
     echo -e "${TEAL}Worktree List:${RESET}" >&2
     echo "" >&2
 
-    local display=0
-    while [ $display -lt $shown_count ]; do
+    # WT_* are ordered newest first, so counting the labels down puts the newest
+    # worktree at the bottom of the list as [0], nearest to the prompt
+    local display=$((shown_count - 1))
+    while [ $display -ge 0 ]; do
         local real_index=${shown[$display]}
         local branch="${WT_BRANCHES[$real_index]}"
         if [ -z "$branch" ]; then
             branch="(detached at $(echo "${WT_HEADS[$real_index]}" | cut -c1-7))"
         fi
 
+        local created="${WT_CREATED[$real_index]}"
+        local created_display="unknown"
+        if [ -n "$created" ]; then
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                created_display=$(date -r "$created" +"%Y-%m-%d %H:%M" 2>/dev/null)
+            else
+                created_display=$(date -d "@$created" +"%Y-%m-%d %H:%M" 2>/dev/null)
+            fi
+            [ -z "$created_display" ] && created_display="unknown"
+        fi
+
         echo -e "${INDENT}${CYAN}[$display] $branch${RESET}" >&2
         echo -e "${INDENT}${INDENT}${YELLOW}Path:${RESET} ${GRAY}${WT_PATHS[$real_index]}${RESET}" >&2
+        echo -e "${INDENT}${INDENT}${YELLOW}Created:${RESET} ${GRAY}${created_display}${RESET}" >&2
         echo -e "${INDENT}${INDENT}${YELLOW}Changes:${RESET} ${GRAY}${WT_CHANGES[$real_index]} file(s)${RESET}" >&2
         echo "" >&2
 
-        display=$((display + 1))
+        display=$((display - 1))
     done
 
     if [ "$hidden_count" -gt 0 ]; then
@@ -912,7 +997,7 @@ build_unique_branch_name() {
 
 # Helper function to move the current branch state into a new worktree
 # Prints the worktree path on stdout, everything else on stderr so that
-# the output can be used directly: cd "$(fit worktree)"
+# the output can be used directly: cd "$(fit worktree-create)"
 do_create_worktree() {
     if ! git rev-parse --git-dir >/dev/null 2>&1; then
         error "ERROR: Not in a git repository!" >&2
@@ -971,7 +1056,7 @@ do_create_worktree() {
         path_suffix=$((path_suffix + 1))
     done
 
-    # Move the uncommitted changes so the round trip through fit merge-worktree stays clean
+    # Move the uncommitted changes so the round trip through fit worktree-merge stays clean
     local stashed=false
     if [ -n "$(git -C "$src_path" status --porcelain 2>/dev/null)" ]; then
         action_with_spinner_and_output "Collecting Uncommitted Changes" git -C "$src_path" stash push -u -m "[worktree] moved to $wt_branch" >&2
@@ -1013,10 +1098,31 @@ do_create_worktree() {
     else
         info "There were no uncommitted changes to move" >&2
     fi
-    info "Bring the work back with: fit merge-worktree" >&2
+    info "Bring the work back with: fit worktree-merge" >&2
     echo "" >&2
 
     echo "$wt_path"
+}
+
+# Helper function to pick a worktree and print its path
+# Prints the path on stdout, everything else on stderr so that
+# the output can be used directly: cd "$(fit worktree-checkout)"
+do_checkout_worktree() {
+    if ! git rev-parse --git-dir >/dev/null 2>&1; then
+        error "ERROR: Not in a git repository!" >&2
+        return 1
+    fi
+
+    collect_worktrees
+
+    # Unlike worktree-merge this lists every worktree, not just the ones with changes
+    local selected_index
+    selected_index=$(show_worktree_list_and_select "true")
+    if [ $? -ne 0 ]; then
+        return 1
+    fi
+
+    echo "${WT_PATHS[$selected_index]}"
 }
 
 show_help() {
@@ -1147,10 +1253,10 @@ show_help() {
     echo -e "${INDENT}${INDENT}${GRAY}- git stash apply stash@{0}${RESET}"
     echo ""
 
-    echo -e "${CYAN}fit worktree [name]${RESET}"
+    echo -e "${CYAN}fit worktree-create [name]${RESET}"
     echo -e "${INDENT}${GRAY}Moves the current state of the branch you are on into a new worktree and prints its path.${RESET}"
     echo -e "${INDENT}${GRAY}Uncommitted changes are moved along, so the repository you ran it from is left clean${RESET}"
-    echo -e "${INDENT}${GRAY}and the work can be brought back later with fit merge-worktree.${RESET}"
+    echo -e "${INDENT}${GRAY}and the work can be brought back later with fit worktree-merge.${RESET}"
     echo -e "${INDENT}${GRAY}Parameters:${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- name (optional): Branch name for the worktree. Defaults to <current-branch>-worktree.${RESET}"
     echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
@@ -1161,10 +1267,23 @@ show_help() {
     echo -e "${INDENT}${INDENT}${GRAY}- The worktree gets its own branch, because git cannot check out one branch twice.${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- A name that is already taken gets a -2, -3, ... suffix.${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- Worktrees are created in <repo>-worktrees next to the main repository.${RESET}"
-    echo -e "${INDENT}${INDENT}${GRAY}- Only the path goes to stdout, so you can run: cd \"\$(fit worktree)\"${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Only the path goes to stdout, so you can run: cd \"\$(fit worktree-create)\"${RESET}"
     echo ""
 
-    echo -e "${CYAN}fit merge-worktree [-all]${RESET}"
+    echo -e "${CYAN}fit worktree-checkout${RESET}"
+    echo -e "${INDENT}${GRAY}Lists every worktree and prints the path of the one you pick, so you can jump to it.${RESET}"
+    echo -e "${INDENT}${GRAY}Parameters:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- None (interactive worktree selection)${RESET}"
+    echo -e "${INDENT}${GRAY}Git commands executed:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- git worktree list --porcelain${RESET}"
+    echo -e "${INDENT}${GRAY}Notes:${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Lists all worktrees, including the ones without uncommitted changes.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Ordered by creation date, newest at the bottom as [0].${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Nothing is checked out or modified, it only prints a path.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Only the path goes to stdout, so you can run: cd \"\$(fit worktree-checkout)\"${RESET}"
+    echo ""
+
+    echo -e "${CYAN}fit worktree-merge [-all]${RESET}"
     echo -e "${INDENT}${GRAY}Brings the work from a worktree into the main repository as uncommitted changes.${RESET}"
     echo -e "${INDENT}${GRAY}Lists the worktrees that have uncommitted changes, asks which one to merge${RESET}"
     echo -e "${INDENT}${GRAY}and which branch the work should end up on.${RESET}"
@@ -1188,6 +1307,7 @@ show_help() {
     echo -e "${INDENT}${INDENT}${GRAY}- The main repository must have no uncommitted changes.${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}- Worktrees with no uncommitted changes are hidden, but are left untouched.${RESET}"
     echo -e "${INDENT}${INDENT}${GRAY}  A worktree whose work is already committed only shows up with -all.${RESET}"
+    echo -e "${INDENT}${INDENT}${GRAY}- Ordered by creation date, newest at the bottom as [0].${RESET}"
     echo ""
 
     if [ "$USE_GITHUB" = "true" ]; then
@@ -1538,11 +1658,15 @@ case "$COMMAND" in
         fi
         ;;
 
-    worktree)
+    worktree-create)
         do_create_worktree
         ;;
 
-    merge-worktree)
+    worktree-checkout)
+        do_checkout_worktree
+        ;;
+
+    worktree-merge)
         do_merge_worktree
         ;;
 
