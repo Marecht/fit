@@ -145,8 +145,9 @@ fit push
   - The worktree gets its own branch (`<current-branch>-worktree` by default), because git cannot check out one branch in two worktrees
   - Worktrees are created in `<repo>-worktrees` next to the main repository
   - Only the path is printed to stdout, so it composes: `cd "$(fit worktree)"`
-- `fit merge-worktree` - Bring the work from a worktree into the main repository as uncommitted changes
-  - Lists all worktrees and asks which one to merge
+- `fit merge-worktree [-all]` - Bring the work from a worktree into the main repository as uncommitted changes
+  - Lists the worktrees that have uncommitted changes and asks which one to merge
+  - Worktrees with nothing uncommitted are hidden from the list (but left untouched); `-all` lists them too, which is what you need for a worktree whose work is already committed
   - Asks for the branch the work should end up on (created if it doesn't exist)
   - Commits everything in the worktree, deletes the worktree, checks out the target branch in the main repository and leaves the changes staged but uncommitted
   - If the target branch is new, the worktree's own commit history is kept and only the final commit is uncommitted
