@@ -38,6 +38,7 @@ _fit() {
         'stash-apply:apply stash but keep in list'
         'stash-clear:delete all stashes'
         'snapshot:stash changes and immediately re-apply them, keeping stash in history'
+        'worktree:move the current branch state into a new worktree and print its path'
         'merge-worktree:merge a worktree into the main repository as uncommitted changes'
         'setup:configure git identity and zsh completion'
         'help:display detailed help information'
@@ -204,6 +205,9 @@ _fit() {
                     ;;
                 commit|push|stash|snapshot)
                     _message
+                    ;;
+                worktree)
+                    _message 'branch name'
                     ;;
                 default-repository-branch)
                     local -a branches
